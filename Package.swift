@@ -47,7 +47,7 @@ let package = Package(
         ),
         .testTarget(
             name: "TGBotConversationTests",
-            dependencies: ["TGBotConversation"]
+            dependencies: ["TGBotConversation", "TGBotTransport"]
         ),
         .testTarget(
             name: "TGBotTransportTests",
