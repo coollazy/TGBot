@@ -18,8 +18,14 @@ public final class PollingUpdateSource: UpdateSource, @unchecked Sendable {
         self.logger = logger
     }
 
+    /// 注意：這個方法會一直阻塞（await 到內部的迴圈 Task 結束）才會 return，
+    /// 不是「丟出去背景跑、立刻回來」——TGBot.run() 本來就預期 bot 這個進程要一直
+    /// 活著，若 start() 提早 return，呼叫端（EchoBotExample.main()）就會跟著 return，
+    /// 整個 process 直接結束，一次輪詢都還沒真的發生。
+    /// 這是實際用獨立的 Example 專案跑 `swift run` 才會現形的問題——用同一個 package
+    /// 內的單元測試不會發現，因為測試從來不需要「process 一直活著」這件事。
     public func start(onUpdate: @escaping @Sendable (Update) async -> Void) async throws {
-        runLoopTask = Task {
+        let task = Task {
             var offset: Int? = nil
             while !Task.isCancelled {
                 do {
@@ -38,6 +44,8 @@ public final class PollingUpdateSource: UpdateSource, @unchecked Sendable {
                 }
             }
         }
+        runLoopTask = task
+        await task.value
     }
 
     public func stop() async {
