@@ -12,13 +12,11 @@ public final class TGBot: @unchecked Sendable {
     private let apiClient: TelegramAPIClient
     private let updateSource: UpdateSource
     private let accessPolicy: AccessPolicy
-    private let stateStore: StateStore
     private let engine: ConversationEngine
-    private let scheduler: BackgroundTaskScheduling
+    private let registry: EngineRegistry
     private let logger: Logger
 
     private var commandDescriptions: [(name: String, description: String)] = []
-    private var errorHandler: (@Sendable (GlobalContext, Error) async throws -> Void)?
 
     public init(
         configuration: Configuration,
@@ -37,17 +35,29 @@ public final class TGBot: @unchecked Sendable {
         self.updateSource = updateSource ?? PollingUpdateSource(apiClient: apiClient, logger: logger)
         self.accessPolicy = configuration.allowList
         let store = stateStore ?? InMemoryStateStore()
-        self.stateStore = store
-        self.engine = ConversationEngine(stateStore: store)
-        self.scheduler = scheduler ?? BackgroundTaskManager()
+        let taskScheduler = scheduler ?? BackgroundTaskManager()
+        let registry = EngineRegistry()
+        self.registry = registry
+        self.engine = ConversationEngine(
+            stateStore: store,
+            apiClient: apiClient,
+            scheduler: taskScheduler,
+            logger: logger,
+            registry: registry
+        )
     }
 
     /// 註冊一個 scene，trigger 決定何時進入（bootstrapping）。見架構設計文件第 9 節。
+    /// 同步呼叫（不需要 await）：寫進的是鎖保護的 EngineRegistry，不經過 actor，
+    /// 保證在 run() 開始輪詢前一定已經註冊完成。
     public func register<State: ConversationState, Session: Codable & Sendable>(
         _ scene: Scene<State, Session>,
         trigger: Trigger
     ) {
-        // TODO: 把 (trigger -> scene) 的對應關係記下來，交給 ConversationEngine.dispatch 使用
+        switch trigger {
+        case .command(let name):
+            registry.registerScene(scene, commandTrigger: name)
+        }
     }
 
     /// 全域指令，description 會在 run() 時自動同步至 Telegram 的 setMyCommands（見第 8.1 節）。
@@ -59,25 +69,32 @@ public final class TGBot: @unchecked Sendable {
         if let description {
             commandDescriptions.append((name: name, description: description))
         }
-        // TODO: 把 (name -> handler) 的對應關係記下來，交給 ConversationEngine.dispatch 使用
+        registry.registerCommand(name, handler: handler)
     }
 
     /// 未命中任何 scene／指令時的 fallback，不設定則靜默忽略。見架構設計文件第 9 節。
     public func onUnhandled(_ handler: @escaping @Sendable (GlobalContext) async throws -> Void) {
-        // TODO
+        registry.setUnhandledHandler(handler)
     }
 
     /// Scene handler 拋出未接住的錯誤時，記 log + 自動 rollback 之外，額外呼叫這個 hook。
-    /// 見架構設計文件 6.5 節。
+    /// 見架構設計文件 6.5 節。TODO：與 ConversationEngine 的錯誤處理路徑接上，下一階段實作。
     public func onError(_ handler: @escaping @Sendable (GlobalContext, Error) async throws -> Void) {
-        errorHandler = handler
+        // TODO
     }
 
     /// 啟動：依 configuration 決定用哪種 UpdateSource，並自動呼叫 setMyCommands 同步指令選單。
     /// 見架構設計文件第 8.1／9 節。
     public func run() async throws {
-        try await apiClient.setMyCommands(commandDescriptions)
-        try await updateSource.start { [engine] update in
+        if !commandDescriptions.isEmpty {
+            try await apiClient.setMyCommands(commandDescriptions)
+        }
+        try await updateSource.start { [engine, accessPolicy, logger] update in
+            guard accessPolicy.isAllowed(userID: update.userID, chatID: update.chatID) else {
+                logger.debug("rejected unauthorized update from chat \(update.chatID)")
+                // TODO: 回覆 configuration.unauthorizedMessage，見架構設計文件第 5 節
+                return
+            }
             await engine.dispatch(update: update)
         }
     }
