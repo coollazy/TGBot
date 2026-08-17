@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<title>TGBot 需求書</title>
+<style>
+  :root {
+    --fg: #1c1c1e;
+    --bg: #ffffff;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --accent: #2563eb;
+    --table-head: #f3f4f6;
+    --confirmed: #16a34a;
+    --open: #d97706;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fg: #e5e7eb;
+      --bg: #16181d;
+      --muted: #9ca3af;
+      --border: #2c2f36;
+      --accent: #60a5fa;
+      --table-head: #1f2229;
+      --confirmed: #4ade80;
+      --open: #fbbf24;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 2.5rem 1.25rem 6rem;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang TC", "Noto Sans TC", "Segoe UI", sans-serif;
+    line-height: 1.75;
+  }
+  main {
+    max-width: 780px;
+    margin: 0 auto;
+  }
+  header.doc-header {
+    margin-bottom: 3rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  header.doc-header h1 {
+    font-size: 1.9rem;
+    margin: 0 0 0.4rem;
+  }
+  header.doc-header p.subtitle {
+    color: var(--muted);
+    margin: 0;
+    font-size: 0.95rem;
+  }
+  .meta {
+    display: flex;
+    gap: 1.5rem;
+    margin-top: 1rem;
+    font-size: 0.85rem;
+    color: var(--muted);
+    flex-wrap: wrap;
+  }
+  h2 {
+    font-size: 1.3rem;
+    margin-top: 3rem;
+    padding-top: 0.25rem;
+  }
+  h3 {
+    font-size: 1.05rem;
+    margin-top: 2rem;
+  }
+  p { margin: 0.8rem 0; }
+  ul, ol { padding-left: 1.4rem; }
+  li { margin: 0.35rem 0; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--table-head);
+    padding: 0.1rem 0.35rem;
+    border-radius: 4px;
+    font-size: 0.88em;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.2rem 0;
+    font-size: 0.9rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.55rem 0.75rem;
+    border: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th {
+    background: var(--table-head);
+    font-weight: 600;
+  }
+  .tag {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+    margin-left: 0.5rem;
+    vertical-align: middle;
+  }
+  .tag.confirmed { background: color-mix(in srgb, var(--confirmed) 18%, transparent); color: var(--confirmed); }
+  .tag.open { background: color-mix(in srgb, var(--open) 18%, transparent); color: var(--open); }
+  .note {
+    border-left: 3px solid var(--accent);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    padding: 0.7rem 1rem;
+    border-radius: 0 6px 6px 0;
+    margin: 1rem 0;
+    font-size: 0.92rem;
+  }
+  .story {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.2rem;
+    margin: 1rem 0;
+  }
+  .story h4 {
+    margin: 0 0 0.4rem;
+    font-size: 0.95rem;
+  }
+  .story .id {
+    color: var(--muted);
+    font-weight: 400;
+  }
+  hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 3rem 0 2rem;
+  }
+  footer {
+    color: var(--muted);
+    font-size: 0.82rem;
+    margin-top: 3rem;
+  }
+</style>
+</head>
+<body>
+<main>
+
+<header class="doc-header">
+  <h1>TGBot 需求書</h1>
+  <p class="subtitle">給 Swift 開發者使用的 Telegram Bot Library</p>
+  <div class="meta">
+    <span>版本：v1.4</span>
+    <span>日期：2026-08-14</span>
+    <span>狀態：需求已確認（含三輪審查後補強）</span>
+  </div>
+</header>
+
+<div class="note">
+  本文件是<strong>需求確認書</strong>，目的是確認「開發者會需要 TGBot 具備哪些能力、解決哪些問題」。
+  刻意不包含任何實作方式、模組分層、程式碼範例等架構設計內容 ── 那些屬於下一階段的架構設計文件，會在本文件確認後另外產出。
+</div>
+
+<h2>1. 文件目的與範圍</h2>
+<p>確認 TGBot 這個 Swift Library 要解決開發者的哪些問題、提供哪些能力，作為後續架構設計的依據。本文件不涉及技術選型或實作方案。</p>
+
+<h2>2. 專案概述</h2>
+<p><strong>名稱：</strong><code>TGBot</code></p>
+<p><strong>定位：</strong>一套 Swift Package，讓工程師能開發 Telegram 機器人，核心價值在於簡化「連續對話」與「選單互動」這兩件事，讓開發者不需要自己從零設計對話狀態管理機制。</p>
+<p><strong>目標使用者：</strong>使用 Swift 開發 Telegram Bot 的工程師，可能是個人專案、也可能是要部署在伺服器上長期運行的正式服務。</p>
+
+<h2>3. 開發者需求情境</h2>
+<p>以下情境來自實際開發 Telegram 機器人時常遇到的需求，用來界定 TGBot 需要支援到什麼程度。</p>
+
+<div class="story">
+  <h4>US-1 <span class="id">多任務起點與流程內分支</span></h4>
+  <p>身為開發者，我希望機器人一開始可以提供多種不同任務讓使用者選擇，且單一任務流程進行中，我可以依照使用者輸入或其他條件，讓對話走向不同的分支，而不被限制只能走固定的單一路線。</p>
+</div>
+
+<div class="story">
+  <h4>US-2 <span class="id">錯誤發生時回退狀態</span></h4>
+  <p>身為開發者，我希望當流程中某個步驟發生錯誤（例如使用者輸入驗證失敗、呼叫外部服務失敗）時，可以讓對話退回到先前的某個步驟重試，而不是讓整個對話直接中斷或強迫使用者從頭開始。</p>
+</div>
+
+<div class="story">
+  <h4>US-3 <span class="id">長任務執行中仍可回應</span></h4>
+  <p>身為開發者，我希望機器人在執行耗時任務（例如處理訂單、產生報表）期間，仍然可以回應使用者傳來的其他訊息，並且能讓使用者查詢「目前正在處理什麼、進度如何」，而不是整個機器人卡住無法互動。</p>
+</div>
+
+<div class="story">
+  <h4>US-4 <span class="id">限制可對話的使用者</span></h4>
+  <p>身為開發者，我希望能選擇性地指定一份允許互動的名單（依 Telegram user ID 或 chat ID）。沒有設定名單時機器人維持公開，任何人都能使用；一旦設定了名單，機器人即自動轉為私人模式，只有名單內的使用者／對話能互動，名單外的訊息會收到明確的拒絕回覆，而非靜默忽略。</p>
+</div>
+
+<div class="story">
+  <h4>US-5 <span class="id">取消／重新開始目前的對話</span></h4>
+  <p>身為開發者，我希望使用者在多步驟對話進行到一半時，能夠主動放棄目前的流程、讓機器人回到沒有進行中任務的狀態，而不是卡在某一步、或必須關掉機器人才能脫身。取消動作只清空「對話流程」本身，不影響已經在背景執行中的任務（US-3／US-6）——背景任務與主要流程本來就是彼此獨立的，取消後背景任務仍會照原本的方式完成並通知。</p>
+</div>
+
+<div class="story">
+  <h4>US-6 <span class="id">背景任務完成時主動通知</span></h4>
+  <p>身為開發者，我希望背景任務（US-3）執行完成或失敗的當下，機器人能夠主動傳訊息告知使用者結果（成功／失敗），甚至可以接續詢問下一步，而不是要求使用者自己去查詢才知道任務結果。若使用者同時有多個背景任務在跑，通知內容需要讓開發者能夠識別是哪一個任務的結果（例如通知時能取得該任務的識別碼），實際要不要在訊息裡呈現、呈現成什麼樣子由開發者決定。</p>
+</div>
+
+<h2>4. 功能需求</h2>
+<ul>
+  <li>能夠收發 Telegram 訊息，並處理使用者傳來的各類更新（文字訊息、按鈕點擊等）。</li>
+  <li>能夠定義「多步驟連續對話」，開發者不需自行管理「使用者目前在對話的哪一步」。</li>
+  <li>連續對話中，能依條件做分支（對應 US-1）。</li>
+  <li>連續對話中，能在錯誤發生時退回先前步驟重試（對應 US-2）。</li>
+  <li>能夠在訊息中提供選單／按鈕，並且使用者的選擇能直接接續到對話流程中，不需要開發者手動比對是哪個按鈕被按下。</li>
+  <li>能夠執行長時間任務，且該任務執行期間，機器人仍可回應其他訊息與查詢（對應 US-3）。</li>
+  <li>長時間任務結束（成功／失敗）時，能夠主動傳訊息通知使用者，不需要使用者自己查詢（對應 US-6）。</li>
+  <li>能夠選擇性地依 Telegram user ID 或 chat ID 設定允許互動的白名單；未設定時機器人公開，設定後自動轉為私人模式，名單外的請求會收到明確拒絕回覆（對應 US-4）。</li>
+  <li>能夠讓使用者主動取消／中止目前進行中的對話流程（對應 US-5）。</li>
+  <li>能夠讓開發者提供 Bot Token 給 TGBot 使用，且不強迫特定的取得方式（可直接提供、也可由環境變數提供）。</li>
+  <li>不同使用者（不同對話）之間彼此獨立，互不影響、可同時進行。</li>
+  <li>同一個使用者對話中，同一時間僅進行一個主要流程（背景任務不計入此限制，可與主要流程並行），但允許被其他任務（如查詢、說明指令）暫時打斷後再恢復原本進度。</li>
+</ul>
+
+<h2>5. 非功能需求</h2>
+<ul>
+  <li><strong>易用性：</strong>API 設計需讓開發者容易上手、程式碼容易維護，不需要開發者自行實作狀態機或事件分派邏輯。</li>
+  <li><strong>對話狀態保存：</strong>v1 不要求對話進度跨重啟保留，服務／App 重新啟動後使用者對話進度遺失是可接受的；閒置中的對話 v1 也不要求自動過期清除。</li>
+  <li><strong>可靠性：</strong>單一使用者的錯誤或異常不應影響其他使用者的對話；呼叫 Telegram API 失敗（含斷線、逾時、429 rate limit 等各種失敗型態）時需有明確、可預期的處理方式，不能讓整個機器人卡死或無聲失敗。</li>
+  <li><strong>可觀察性：</strong>開發者需要能夠知道機器人內部發生了什麼事——不只是錯誤，一般操作（收發訊息、狀態轉換、白名單攔截等）也需要能夠被記錄，詳細程度由開發者自行調整。</li>
+  <li><strong>可測試性：</strong>開發者需要能夠在不連接真實 Telegram 服務的情況下，為自己撰寫的對話流程撰寫自動化測試。</li>
+  <li><strong>部署環境：</strong>需能在 macOS 與 Linux 上執行，並支援兩種常見的封裝與交付方式──打包成 Docker image（部署於 Linux server），或打包成 macOS application（供使用者在自己電腦上執行）；最低支援 Swift 6.0（依架構設計階段的實測結果訂定，見架構設計文件）。</li>
+  <li><strong>使用規模：</strong>預期為少量使用者，非高併發、高流量場景，效能與延遲不是主要考量重點。</li>
+  <li><strong>版本相容性：</strong>1.0 版之後，版本更新需遵循語意化版本（SemVer）承諾，次版本／修訂版本更新不應讓既有開發者的程式碼編譯失敗。</li>
+  <li><strong>文件需求：</strong>v1 發布時至少需具備最小上手範例（quickstart）與核心公開 API 的說明文件。</li>
+</ul>
+
+<h2>6. 範圍外（v1 暫不處理）</h2>
+<ul>
+  <li>Telegram Bot API 的進階功能（如 Payments、Games、Inline Mode）非首版重點。</li>
+  <li>不提供圖形化管理後台或視覺化流程編輯工具。</li>
+  <li>不特別針對群組（group/channel）管理場景做最佳化，優先聚焦一對一對話。</li>
+</ul>
+
+<h2>7. 產品決策記錄</h2>
+<table>
+  <tr><th>項目</th><th>決策內容</th><th>狀態</th></tr>
+  <tr>
+    <td>訊息接收方式</td>
+    <td>需同時支援輪詢（Polling）與 Webhook 兩種方式，因為部署場景涵蓋沒有公開 HTTPS endpoint 的環境（如 macOS app），也涵蓋有 domain／反向代理的 Linux server 環境。分階段實作：v1 先支援 Polling（可覆蓋所有部署場景），Webhook 列為後續擴充。</td>
+    <td><span class="tag confirmed">已確認</span></td>
+  </tr>
+  <tr>
+    <td>對話狀態保存需求</td>
+    <td>不需要跨重啟保存，服務／App 重啟後對話進度遺失可接受。</td>
+    <td><span class="tag confirmed">已確認</span></td>
+  </tr>
+  <tr>
+    <td>部署環境</td>
+    <td>macOS 與 Linux server，交付形式為 Docker image 或 macOS application。</td>
+    <td><span class="tag confirmed">已確認</span></td>
+  </tr>
+  <tr>
+    <td>使用規模</td>
+    <td>少量使用者，非高併發場景。</td>
+    <td><span class="tag confirmed">已確認</span></td>
+  </tr>
+  <tr>
+    <td>使用者存取控制</td>
+    <td>依 Telegram user ID／chat ID 設定的白名單為選擇性設定：未設定＝公開，設定後自動轉為私人模式。名單外的請求收到明確拒絕回覆（見 US-4）。</td>
+    <td><span class="tag confirmed">已確認</span></td>
+  </tr>
+  <tr>
+    <td>背景任務通知</td>
+    <td>背景任務結束（成功／失敗）須能主動通知使用者，不能只靠使用者自行查詢（見 US-6）。</td>
+    <td><span class="tag confirmed">已確認</span></td>
+  </tr>
+  <tr>
+    <td>Telegram API 呼叫失敗處理</td>
+    <td>需有明確的處理策略，不能無聲失敗或讓機器人卡死；一次性呼叫與持續輪詢兩種情境的處理方式可以不同。</td>
+    <td><span class="tag confirmed">已確認</span></td>
+  </tr>
+  <tr>
+    <td>閒置對話過期</td>
+    <td>v1 不處理自動過期清除，之後有實際需求再評估。</td>
+    <td><span class="tag confirmed">已確認</span></td>
+  </tr>
+  <tr>
+    <td>取消對話（US-5）</td>
+    <td>需提供讓使用者中途取消／重新開始對話的方式（見 US-5）；取消僅作用於對話流程本身，不影響已在背景執行的任務。</td>
+    <td><span class="tag confirmed">已確認</span></td>
+  </tr>
+  <tr>
+    <td>可測試性</td>
+    <td>v1 即納入可測試性設計考量，非事後補強。</td>
+    <td><span class="tag confirmed">已確認</span></td>
+  </tr>
+  <tr>
+    <td>最低 Swift 版本</td>
+    <td>Swift 6.0，依架構設計階段的實測結果訂定，技術原因詳見架構設計文件。</td>
+    <td><span class="tag confirmed">已確認</span></td>
+  </tr>
+</table>
+
+<h2>8. 下一步</h2>
+<p>本文件所列需求與產品決策已全數確認。對應的架構設計文件（《TGBot 架構設計》）已依本文件內容產出，並經過審查與補強；後續若需求有變動，將回到本文件更新，再同步調整架構設計文件。</p>
+
+<footer>此文件為需求確認書，聚焦於「需要什麼」，不涉及「如何實作」。</footer>
+
+</main>
+</body>
+</html>

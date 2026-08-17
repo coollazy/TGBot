@@ -1,0 +1,738 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<title>TGBot 架構設計</title>
+<style>
+  :root {
+    --fg: #1c1c1e;
+    --bg: #ffffff;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --accent: #2563eb;
+    --code-bg: #f4f5f7;
+    --table-head: #f3f4f6;
+    --confirmed: #16a34a;
+    --open: #d97706;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fg: #e5e7eb;
+      --bg: #16181d;
+      --muted: #9ca3af;
+      --border: #2c2f36;
+      --accent: #60a5fa;
+      --code-bg: #1e2128;
+      --table-head: #1f2229;
+      --confirmed: #4ade80;
+      --open: #fbbf24;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 2.5rem 1.25rem 6rem;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang TC", "Noto Sans TC", "Segoe UI", sans-serif;
+    line-height: 1.75;
+  }
+  main { max-width: 880px; margin: 0 auto; }
+  header.doc-header {
+    margin-bottom: 3rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  header.doc-header h1 { font-size: 1.9rem; margin: 0 0 0.4rem; }
+  header.doc-header p.subtitle { color: var(--muted); margin: 0; font-size: 0.95rem; }
+  .meta {
+    display: flex; gap: 1.5rem; margin-top: 1rem;
+    font-size: 0.85rem; color: var(--muted); flex-wrap: wrap;
+  }
+  h2 { font-size: 1.3rem; margin-top: 3rem; padding-top: 0.25rem; }
+  h3 { font-size: 1.05rem; margin-top: 2rem; }
+  p { margin: 0.8rem 0; }
+  ul, ol { padding-left: 1.4rem; }
+  li { margin: 0.35rem 0; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--code-bg);
+    padding: 0.1rem 0.35rem;
+    border-radius: 4px;
+    font-size: 0.88em;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.1rem;
+    overflow-x: auto;
+    font-size: 0.85rem;
+  }
+  pre code { background: none; padding: 0; font-size: 1em; }
+  table { width: 100%; border-collapse: collapse; margin: 1.2rem 0; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 0.55rem 0.75rem; border: 1px solid var(--border); vertical-align: top; }
+  th { background: var(--table-head); font-weight: 600; }
+  .tag {
+    display: inline-block; font-size: 0.72rem; font-weight: 600;
+    padding: 0.15rem 0.55rem; border-radius: 999px; margin-left: 0.5rem; vertical-align: middle;
+  }
+  .tag.confirmed { background: color-mix(in srgb, var(--confirmed) 18%, transparent); color: var(--confirmed); }
+  .tag.open { background: color-mix(in srgb, var(--open) 18%, transparent); color: var(--open); }
+  .note {
+    border-left: 3px solid var(--accent);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    padding: 0.7rem 1rem; border-radius: 0 6px 6px 0; margin: 1rem 0; font-size: 0.92rem;
+  }
+  .module {
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 1rem 1.2rem; margin: 1rem 0;
+  }
+  .module h4 { margin: 0 0 0.4rem; font-size: 0.95rem; }
+  .module .req { color: var(--muted); font-size: 0.82rem; }
+  .tree { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; white-space: pre; }
+  footer { color: var(--muted); font-size: 0.82rem; margin-top: 3rem; }
+</style>
+</head>
+<body>
+<main>
+
+<header class="doc-header">
+  <h1>TGBot 架構設計</h1>
+  <p class="subtitle">依據《TGBot 需求書 v1.4》產出的技術架構方案</p>
+  <div class="meta">
+    <span>版本：v1.5</span>
+    <span>日期：2026-08-17</span>
+    <span>狀態：架構設計已確認（含四輪審查後補強）</span>
+  </div>
+</header>
+
+<div class="note">
+  本文件依《TGBot 需求書 v1.4》的 US-1～US-6 與各項功能／非功能需求展開技術方案，說明模組拆分、核心型別與資料流向。
+  文件中的 protocol／型別簽名為設計草案，尚未落地成實際程式碼。
+</div>
+
+<h2>1. 文件目的與範圍</h2>
+<p>說明 TGBot 如何透過模組拆分與核心抽象，滿足需求書中列出的能力，作為後續實作的依據。</p>
+
+<h2>2. 整體架構總覽</h2>
+<p>系統分成五個職責明確的模組，資料流向大致為：</p>
+<div class="tree">Telegram Server
+     │
+     ▼
+[Update Source]  ── 取得原始 Update（Polling，之後加 Webhook）
+     │
+     ▼
+[Access Control]  ── 依白名單過濾 user/chat（US-4）
+     │
+     ▼
+[Conversation Engine]  ── 對話狀態圖：分支、rollback、scene 中斷／恢復（US-1、US-2）
+     │              │
+     │              └──▶ [Background Task Manager]  ── 長任務執行與進度查詢（US-3）
+     ▼
+Telegram Server（回覆訊息／選單）</div>
+
+<h2>3. 模組拆分</h2>
+
+<div class="module">
+  <h4>TGBotTransport</h4>
+  <p>負責與 Telegram Bot API 溝通：HTTP client、Codable model、取得 Update 的機制。</p>
+  <p class="req">對應需求：功能需求「收發 Telegram 訊息」、產品決策「Polling 優先、Webhook 後續擴充」</p>
+</div>
+
+<div class="module">
+  <h4>TGBotAccessControl</h4>
+  <p>白名單過濾邏輯，在 Update 進入對話引擎前先行攔截。</p>
+  <p class="req">對應需求：US-4</p>
+</div>
+
+<div class="module">
+  <h4>TGBotConversation</h4>
+  <p>核心對話引擎：狀態圖、Session、歷史棧（rollback）、Scene 棧（interrupt／resume）、選單整合。這是整個 library 的核心價值所在。</p>
+  <p class="req">對應需求：US-1、US-2、功能需求「多步驟連續對話」「選單整合」</p>
+</div>
+
+<div class="module">
+  <h4>TGBotBackgroundTask</h4>
+  <p>與對話引擎解耦的長任務執行模組，提供啟動、進度更新、查詢 API；任務結束時能透過對話引擎自己的 chat actor，安全地推送結果或觸發轉移。</p>
+  <p class="req">對應需求：US-3、US-6</p>
+</div>
+
+<div class="module">
+  <h4>TGBot（Umbrella）</h4>
+  <p>對外統一入口，組裝以上模組，提供開發者實際使用的 <code>Bot</code> 型別與註冊 API。</p>
+</div>
+
+<h2>4. Update 取得層（TGBotTransport）</h2>
+<p>抽象成 protocol，讓 Polling／Webhook 可以互換，對上層（Access Control、Conversation Engine）完全透明：</p>
+<pre><code>protocol UpdateSource {
+    func start(onUpdate: @escaping (Update) async -> Void) async throws
+    func stop() async
+}
+
+// v1 實作
+final class PollingUpdateSource: UpdateSource { ... }
+
+// 後續擴充（v2），需要一個可對外接收 HTTPS 請求的 endpoint
+final class WebhookUpdateSource: UpdateSource { ... }
+</code></pre>
+<p><code>Bot</code> 型別在初始化時擇一注入，不論哪種模式，後續流程完全一致。</p>
+
+<h3>4.1 API 呼叫容錯策略</h3>
+<p>Telegram API 呼叫失敗（斷線、逾時、429 rate limit）依「一次性呼叫」與「持續輪詢」兩種情境分開處理，不套用同一套規則：</p>
+<ul>
+  <li><strong>一次性呼叫</strong>（例如 handler 內 <code>ctx.reply(...)</code> 觸發的 <code>sendMessage</code>）：<strong>不重試</strong>，失敗立即拋出，交由呼叫端（scene handler，最終走 6.5 節的錯誤處理路徑）決定要不要通知使用者、要不要自己重送。</li>
+  <li><strong><code>PollingUpdateSource</code> 的 <code>getUpdates</code></strong>：<strong>永遠不放棄</strong>（它是機器人唯一的收訊管道，放棄等於機器人再也收不到訊息），改用退避延遲策略——每次連續失敗延遲加倍，連續失敗達到上限（預設 5 次）後延遲不再繼續拉長、維持在封頂值，任何一次成功後延遲與連續失敗計數立即歸零重新開始。</li>
+</ul>
+<pre><code>protocol Clock {
+    func now() -> Date
+    func sleep(for duration: TimeInterval) async throws
+}
+
+// v1 預設實作；測試時可替換成假時鐘，讓退避邏輯瞬間跑完不用真的等待
+struct SystemClock: Clock { ... }
+
+actor PollingBackoff {
+    private var consecutiveFailures = 0
+    private let baseDelay: TimeInterval = 1.0
+    private let maxDelay: TimeInterval = 32.0   // 對應約 5 次封頂
+    private let clock: Clock
+
+    func delayForNextAttempt() -> TimeInterval {
+        min(baseDelay * pow(2, Double(consecutiveFailures)), maxDelay)
+    }
+    func recordFailure() { consecutiveFailures += 1 }
+    func recordSuccess() { consecutiveFailures = 0 }
+}
+</code></pre>
+<p><code>Clock</code> protocol 是為 6.6 節「可測試性設計」預留的注入點，<code>PollingUpdateSource</code> 內部不會直接呼叫 <code>Task.sleep</code>／系統時鐘。</p>
+
+<h2>5. 存取控制層（TGBotAccessControl）</h2>
+<pre><code>protocol AccessPolicy {
+    func isAllowed(userID: Int64?, chatID: Int64) -> Bool
+}
+
+struct AllowList: AccessPolicy {
+    var userIDs: Set&lt;Int64&gt;
+    var chatIDs: Set&lt;Int64&gt;
+
+    // 兩個集合都是空的＝未設定＝公開模式，任何人都放行
+    func isAllowed(userID: Int64?, chatID: Int64) -> Bool {
+        if userIDs.isEmpty && chatIDs.isEmpty { return true }
+        if let userID, userIDs.contains(userID) { return true }
+        return chatIDs.contains(chatID)
+    }
+}
+</code></pre>
+<p><code>AllowList</code> 是<strong>選擇性設定、opt-in</strong>：開發者完全不設定時等同公開模式，不做任何攔截；只要設定了 <code>userIDs</code> 或 <code>chatIDs</code> 任一項，機器人自動轉為私人模式。在 Update 進入 Conversation Engine 之前先過濾，被拒絕的請求會收到<strong>明確的拒絕回覆</strong>（而非靜默忽略），預設文字為：</p>
+<pre><code>This is a private bot.
+You are not authorized to use it.
+
+user_id: &lt;user_id&gt;
+chat_id: &lt;chat_id&gt;
+</code></pre>
+<p>此文字可透過 <code>configuration.unauthorizedMessage</code> 由開發者覆寫。</p>
+
+<h2>6. 對話引擎（TGBotConversation）</h2>
+
+<h3>6.1 核心型別</h3>
+<pre><code>// 同時要求 Hashable（供具體 Scene 內部用 dictionary 分派 handler）
+// 與 Codable（供 6.2 節的型別擦除儲存）
+protocol ConversationState: Codable, Hashable {}
+
+// 不需要 session 的 scene 可省略泛型參數，預設用這個空型別
+public struct EmptySession: Codable {}
+
+enum Transition&lt;State: ConversationState&gt; {
+    case transition(to: State)
+    case stay
+    case rollback
+    case interrupt(with: AnyScene)
+    case end
+}
+
+// 刻意用 class（跟 Context 同樣理由）：開發者慣用 let registration = Scene(...)
+// 接著連續呼叫多次 .on(...) 註冊 handler，若是 struct，.on(...) 要嘛得標 mutating、
+// 要嘛得把 registration 宣告成 var，兩者都不符合這種「宣告後就當常數使用」的寫法。
+final class Scene&lt;State: ConversationState, Session: Codable = EmptySession&gt; {
+    let name: String
+    let initial: State
+    let initialSession: Session
+    // 內部儲存每個 state 對應的處理函式；class 讓 on(...) 不需要 mutating 即可寫入
+    private var handlers: [State: (Context&lt;State, Session&gt;) async throws -> Transition&lt;State&gt;] = [:]
+
+    init(name: String, initial: State, initialSession: Session) {
+        self.name = name
+        self.initial = initial
+        self.initialSession = initialSession
+    }
+
+    // 每個 state 對應一個處理函式，ctx.session 型別即為開發者指定的 Session
+    func on(_ state: State, handler: @escaping (Context&lt;State, Session&gt;) async throws -> Transition&lt;State&gt;) {
+        handlers[state] = handler
+    }
+}
+
+// 不需要 session 的 scene（Session 用預設的 EmptySession）可省略 initialSession，
+// 用條件 extension 限定只在 Session == EmptySession 時提供這個更簡短的 init，
+// 而不是在主要 init 上硬塞一個對其他 Session 型別無意義的預設值
+extension Scene where Session == EmptySession {
+    convenience init(name: String, initial: State) {
+        self.init(name: name, initial: initial, initialSession: EmptySession())
+    }
+}
+
+// 不綁定特定 scene 的 State/Session、跨所有 handler 通用的基底能力，
+// 全域指令（8.1 節）拿到的就是這個型別
+class GlobalContext {
+    let chatID: Int64
+    let userID: Int64?
+    var text: String?           // 純文字訊息內容（若這次 Update 是文字訊息）
+    var callbackData: String?   // 使用者點擊 inline 按鈕帶的值（若這次 Update 是 callback_query）
+
+    func reply(_ text: String) async throws
+    func replyWithMenu(_ text: String, buttons: [[InlineButton]]) async throws
+    func resetConversation() async   // US-5：清空目前 chat 的 scene/state/session/歷史棧/scene 棧，回到 idle
+}
+
+// 開發者在 scene 的 state handler 裡實際拿到、實際會打的型別，繼承 GlobalContext
+// 再加上跟具體 State/Session 綁定的能力。
+// 刻意用 class（參考型別）而非 struct：讓 ctx.session.xxx = ... 這種寫法可以直接生效，
+// 不需要把 handler 簽名改成 inout Context。
+final class Context&lt;State: ConversationState, Session: Codable&gt;: GlobalContext {
+    var session: Session
+
+    func startBackgroundJob(
+        id: String,
+        work: @escaping (JobProgress) async throws -> Void,
+        // taskID 讓開發者在多個背景任務並存時能辨識是哪一個完成了（對應 US-6）；
+        // 回傳值可選是否要順便觸發 transition，回傳 nil 代表只做 onComplete 裡的動作（例如純粹回訊息），不改變狀態
+        onComplete: @escaping (JobResult, String, Context) async throws -> Transition&lt;State&gt;?
+    )
+}
+</code></pre>
+
+<h3>6.1.1 Scene 的型別擦除（AnyScene／SuspendedScene）</h3>
+<div class="note">
+  以下 <code>AnyScene</code>／<code>SuspendedScene</code>／<code>TransitionKind</code> 皆為<strong>內部實作示意</strong>，用來證明「型別擦除＋暫停/恢復」這個機制在 Swift 型別系統下可行，並非最終定案的簽名——它們都是框架內部私有的管線，開發者不會接觸到，實際撰寫時允許依實作方便調整，不像 6.1 節的 <code>Context</code>／<code>Scene</code>／<code>Transition</code> 屬於開發者會直接使用的公開介面，需要維持穩定。
+</div>
+<p><code>Scene&lt;State, Session&gt;</code> 是泛型，但 <code>.interrupt(with:)</code>（可以中斷成任何一個 scene，型別未知）與 scene 棧（要能同時存放好幾個「暫停中、各自泛型參數都不同」的 scene）都需要在執行期處理「型別不固定」的 scene，因此需要一層型別擦除，做法與 6.2 節 Session 的型別擦除一致：</p>
+<pre><code>// 型別擦除包裝，內部持有一個具體的 Scene&lt;State, Session&gt;，
+// 對外只暴露「餵一個 Update 進去、跑對應的 handler」這個統一介面。
+// 進出的 state／session 都以各自獨立的 Data 傳遞，對應 SuspendedScene 的兩個欄位；
+// 內部實作會先用該 Scene 已知的具體 State/Session 型別解碼，跑完 handler 後再各自編碼回 Data。
+struct AnyScene {
+    private let _resume: (Update, _ savedState: Data, _ savedSession: Data)
+        async throws -> (transition: TransitionKind, newState: Data, newSession: Data)
+    init&lt;State, Session&gt;(_ scene: Scene&lt;State, Session&gt;) { ... }
+}
+
+// Transition 擦除後的種類（state 內容已經是編碼過的 Data，跟 AnyScene 的回傳值搭配使用）
+enum TransitionKind { case moved, stayed, rolledBack, interrupted, ended }
+
+// scene 棧裡「被暫停」的一筆記錄：暫停時的 scene 本身（型別已擦除）
+// 加上暫停當下的 state／session（同樣以 Data 編碼），interrupt 結束後用來原地恢復
+struct SuspendedScene {
+    let scene: AnyScene
+    let savedState: Data
+    let savedSession: Data
+}
+</code></pre>
+<p>這層擦除跟 6.2 節的 <code>sessionData</code>、<code>currentState</code> 是同一套手法（要求 <code>State</code>／<code>Session</code> 均為 <code>Codable</code>，編碼成 <code>Data</code> 換取型別無關的儲存），開發者不會接觸到 <code>AnyScene</code>／<code>SuspendedScene</code>／<code>TransitionKind</code>，這些型別只在框架內部使用。</p>
+
+<h3>6.2 每個 chat 的執行狀態</h3>
+<p>每個 chat 一份，記錄目前所在的 scene／state、session 資料、狀態歷史棧（供 rollback）、scene 棧（供 interrupt／resume）。由於同一個 chat 在不同時間點可能執行不同的 scene，而每個 scene 的 <code>State</code>／<code>Session</code> 具體型別都不一樣，<code>ChatConversationRecord</code>（橫跨所有可能 scene 的儲存層）無法直接用泛型持有它們，兩者統一以 <code>Codable</code> 編碼後的 <code>Data</code> 做型別擦除儲存（<code>State</code> 之所以要求 <code>Codable</code>，見 6.1 節 <code>ConversationState</code> 定義），待對應 scene 的 handler 執行時再依該 scene 已知的具體型別解碼回來。這僅是內部實作細節，開發者透過 <code>ctx.session</code> 拿到的永遠是第 6.1 節指定的具體型別，不會接觸到這層擦除。</p>
+<pre><code>struct ChatConversationRecord {
+    var activeScene: String?
+    var currentStateData: Data?       // 內部以 Codable 編碼儲存（型別擦除，開發者無感）
+    var sessionData: Data             // 內部以 Codable 編碼儲存（型別擦除，開發者無感）
+    var stateHistory: [Data]          // rollback 用，元素與 currentStateData 同樣的編碼方式
+    var sceneStack: [SuspendedScene]  // interrupt/resume 用
+
+    // 待處理的背景任務完成回呼，key 為 taskID（見 7 節 registerPendingCompletion／deliverBackgroundJobResult）。
+    // 刻意獨立於上面幾個「對話流程本身」的欄位之外：.end／resetConversation() 只會清空
+    // activeScene／currentStateData／sessionData／stateHistory／sceneStack，
+    // 不會動到 pendingCompletions —— 這是 US-6「取消對話不影響已在執行的背景任務」的實作根據。
+    // 閉包本身無法 Codable 化，v1 僅存在 InMemoryStateStore 的記憶體中，不參與任何序列化／持久化路徑；
+    // 若未來 StateStore 要支援可持久化實作（見第 12 節），這一欄需要另外設計（例如任務完成後改發一個
+    // 可重建的事件，而非直接持有 closure），本文件先記錄這個限制，不預先解決。
+    var pendingCompletions: [String: (JobResult) async throws -> Void]
+}
+</code></pre>
+
+<h3>6.3 State Store</h3>
+<pre><code>protocol StateStore {
+    func load(chatID: Int64) async -> ChatConversationRecord
+    func save(chatID: Int64, _ record: ChatConversationRecord) async
+}
+
+// v1：唯一實作，符合需求書「不需跨重啟保存」
+final class InMemoryStateStore: StateStore { ... }
+</code></pre>
+<p>刻意將持久化行為收斂在單一 protocol 背後，即使 v1 只有記憶體實作，未來若需求改變（例如要支援重啟不遺失），只需新增一個實作，不影響上層邏輯。</p>
+
+<h3>6.4 併發模型落地方式</h3>
+<p>需求書已確認的併發模型（跨 chat 無限並發、同一 chat 同時一個 active scene）在實作上對應：</p>
+<ul>
+  <li>每個 chat 的 <code>ChatConversationRecord</code> 讀寫都透過一個以 chatID 分派的 <code>actor</code>（或等效的序列化佇列）執行，確保同一 chat 的事件依序處理、不會有 race condition。</li>
+  <li>不同 chat 的 actor 互相獨立，Swift Concurrency 天然讓它們平行執行，滿足「跨 chat 無限並發」。</li>
+  <li><code>.interrupt(with:)</code> 與 <code>.rollback</code> 都只是操作同一份 <code>ChatConversationRecord</code> 裡的棧結構，不需要額外的鎖。</li>
+</ul>
+
+<h3>6.5 錯誤處理與 Logging</h3>
+<p>採用 <strong><code>swift-log</code></strong> 作為 Logging 的底層介面（SSWG 標準、無外部依賴，且與 Vapor 生態相容）。TGBot 內部所有錯誤訊息都透過 <code>Logger</code> 印出，實際輸出到哪裡（console／file／串接監控服務）由開發者自行決定要接哪個 <code>LogHandler</code>，TGBot 不管這件事。</p>
+<pre><code>let bot = TGBot(configuration: .init(
+    token: "YOUR_BOT_TOKEN",
+    logLevel: .error   // 預設值；可調整為 .debug／.info 等 swift-log 標準等級
+))
+</code></pre>
+<p>預設 log level 為 <code>.error</code>，確保開發者即使沒有額外設定，出錯時也一定看得到；要調整詳細程度（例如開發階段想看 <code>.debug</code>）由開發者自行設定 <code>logLevel</code>。</p>
+
+<p><strong>Scene handler 拋出未被接住的錯誤時</strong>，Conversation Engine 在框架邊界統一攔截，行為如下：</p>
+<ol>
+  <li>透過 <code>Logger</code> 以 <code>.error</code> 等級記錄錯誤內容與發生的 chatID／scene／state。</li>
+  <li>自動執行 <code>.rollback()</code>，複用 6.2 節已經設計好的狀態歷史棧，讓對話回到上一個安全狀態，而不是卡死或讓整個 process 崩潰。</li>
+  <li>若開發者有註冊全域的 <code>onError</code> hook，額外呼叫它，讓開發者可以選擇要不要通知使用者、或串接自己的監控系統：</li>
+</ol>
+<pre><code>bot.onError { ctx, error in
+    try await ctx.reply("抱歉，發生了一點問題，請再試一次")
+}
+</code></pre>
+<p><code>onError</code> 是可選的；不註冊的話，行為就只有「記 log + 自動 rollback」，使用者端不會收到額外訊息。</p>
+
+<h3>6.6 可測試性設計</h3>
+<p>v1 即納入可測試性考量，而非事後補強。這裡的「可測試性」指的是需求書的 US（開發者要能在不連真實 Telegram 服務的情況下，測試自己寫的對話流程），而不是 TGBot 自己的內部單元測試——也就是說，下面列的 protocol 必須是外部開發者的測試目標（test target）能碰到的，因此<strong>刻意標為 <code>public</code></strong>，是第 13 節「Package 結構」裡 <code>package</code> 存取層級的例外：</p>
+<ul>
+  <li><strong>時間來源可注入</strong>：4.1 節的 <code>Clock</code> protocol 是核心手段，退避重試邏輯不直接呼叫 <code>Task.sleep</code>／系統時鐘，測試時可注入假時鐘讓延遲邏輯瞬間跑完。</li>
+  <li><strong><code>StateStore</code>、<code>UpdateSource</code>、<code>AccessPolicy</code></strong>：本來就是 protocol，天生可 mock，開發者在自己的測試裡建立 <code>TGBot</code> 時可注入假實作，不需要連真實 Telegram 服務。</li>
+  <li><strong><code>BackgroundTaskManager</code> 改為 protocol</strong>：原第 7 節草案是具體 <code>actor</code>，改成先定義 <code>protocol BackgroundTaskScheduling</code>，<code>BackgroundTaskManager</code> 是其 v1 實作，開發者測試「scene handler 裡呼叫了背景任務」這件事時可以注入一個假的排程器，不用真的跑異步工作。</li>
+</ul>
+<p>其餘框架內部才用得到的型別（<code>AnyScene</code>、<code>SuspendedScene</code>、<code>ChatConversationRecord</code>、<code>TransitionKind</code> 等，見 6.1.1／6.2／7 節）維持 <code>package</code>，開發者不需要也不應該接觸到它們。</p>
+
+<h2>7. 背景任務管理（TGBotBackgroundTask）</h2>
+<div class="note">
+  下方 <code>extension Context</code>／<code>extension ConversationEngine</code> 兩段（<code>registerPendingCompletion</code>／<code>deliverBackgroundJobResult</code> 等）為<strong>內部橋接邏輯示意</strong>，重點是證明「型別安全的 onComplete 能安全穿越到型別無關的排程器、再安全穿越回來」這件事可行，非最終簽名，維持 <code>package</code> 存取層級。<code>BackgroundTaskScheduling</code> protocol 本身（見 6.6 節）與 6.1 節的 <code>Context.startBackgroundJob</code> 公開簽名則不同——前者刻意標為 <code>public</code>，是開發者測試時注入假排程器的入口；後者是開發者一般寫 bot 邏輯時會用到的公開 API。
+</div>
+<p><code>JobResult</code>／<code>JobStatus</code> 定義：</p>
+<pre><code>enum JobResult {
+    case success
+    case failure(Error)
+}
+
+struct JobStatus {
+    let taskID: String
+    let lastMessage: String   // 最近一次 JobProgress.update(...) 的內容
+    let isFinished: Bool
+}
+</code></pre>
+<p><code>BackgroundTaskScheduling</code> 這一層完全不知道任何 scene 的 <code>State</code>／<code>Session</code> 具體型別（它只認得 <code>chatID</code>／<code>taskID</code>），所以它的 <code>onComplete</code> 是型別擦除過的、不帶 <code>Context</code>。開發者實際呼叫的 <code>ctx.startBackgroundJob(...)</code>（6.1 節，型別安全、帶 <code>Context</code>）是在更上層的 Conversation Engine 裡做橋接：把開發者傳入的、型別安全的 <code>onComplete</code> 閉包用型別擦除包起來、跟 6.2 節 Session／State 用同一套手法存進 <code>ChatConversationRecord</code>，實際交給 <code>BackgroundTaskScheduling</code> 的只是一個「通知一下、去查該存好的閉包」的瘦身版本：</p>
+<pre><code>protocol BackgroundTaskScheduling {
+    func start(chatID: Int64, taskID: String,
+               work: @escaping (JobProgress) async throws -> Void,
+               onComplete: @escaping (JobResult) async throws -> Void)
+    func status(chatID: Int64, taskID: String) -> JobStatus?
+}
+
+actor BackgroundTaskManager: BackgroundTaskScheduling {
+    func start(chatID: Int64, taskID: String,
+               work: @escaping (JobProgress) async throws -> Void,
+               onComplete: @escaping (JobResult) async throws -> Void) {
+        Task {
+            let result: JobResult
+            do { try await work(JobProgress(...)); result = .success }
+            catch { result = .failure(error) }
+            try? await onComplete(result)   // 交給呼叫端決定這個 closure 實際做什麼
+        }
+    }
+    func status(chatID: Int64, taskID: String) -> JobStatus? { ... }
+}
+
+final class JobProgress {
+    func update(_ message: String)
+}
+
+// Context.startBackgroundJob 內部的橋接邏輯（6.1 節簽名的實作細節）：
+extension Context {
+    func startBackgroundJob(
+        id: String,
+        work: @escaping (JobProgress) async throws -> Void,
+        onComplete: @escaping (JobResult, String, Context) async throws -> Transition&lt;State&gt;?
+    ) {
+        // 把型別安全的 onComplete 用型別擦除包起來，存進這個 chat 的 ChatConversationRecord
+        engine.registerPendingCompletion(chatID: chatID, taskID: id) { [self] result in
+            if let transition = try await onComplete(result, id, self) {
+                try await engine.apply(transition, chatID: chatID, scene: activeScene)
+            }
+        }
+        // 交給排程器的是不帶型別的版本，排程器完成後只需要「通知引擎去處理」
+        scheduler.start(chatID: chatID, taskID: id, work: work) { result in
+            await engine.deliverBackgroundJobResult(chatID: chatID, taskID: id, result: result)
+        }
+    }
+}
+
+// ConversationEngine 內：任務完成事件真正被「執行」的地方，
+// 跟處理一般 Update 走同一個 chat 專屬 actor，天然序列化、無 race condition
+extension ConversationEngine {
+    func deliverBackgroundJobResult(chatID: Int64, taskID: String, result: JobResult) async {
+        // 在這個 chat 自己的 actor 內執行：取出先前 registerPendingCompletion 存的閉包並呼叫
+        if let completion = pendingCompletions(chatID: chatID, taskID: taskID) {
+            try? await completion(result)
+        }
+    }
+}
+</code></pre>
+<p>以獨立的 <code>actor</code>（<code>BackgroundTaskManager</code>）管理任務執行本身，key 為 <code>(chatID, taskID)</code>。啟動後任務跑在獨立的 <code>Task</code>，不佔用該 chat 的 conversation actor，因此對話引擎可以立即回到可回應狀態（滿足 US-3）。查詢進度是另一條獨立路徑（例如 <code>/status</code> 指令），不需要透過對話狀態機。</p>
+
+<h3>7.1 任務完成時主動通知對話引擎（US-6）</h3>
+<p>背景任務結束（成功或失敗）時，<strong>必須</strong>能主動推送消息、甚至觸發場景轉移，不能只靠被動查詢。但背景任務本身跑在獨立 <code>Task</code>，若直接從那裡去改 <code>ChatConversationRecord</code>，會跟該 chat 當下正在處理的其他 Update 產生 race condition（例如任務剛好在使用者傳新訊息的同一瞬間完成）。</p>
+<p>解法就是上面 <code>deliverBackgroundJobResult</code> 展示的橋接：<strong>任務完成事件必須經過該 chat 自己的 conversation actor</strong>，跟處理一般 Update 走同一條序列化佇列，而不是被背景任務的 <code>actor</code> 直接寫入。開發者傳入的 <code>onComplete</code> 實際執行時機是「排進該 chat 的 actor 佇列、輪到它時才執行」，因此裡面呼叫 <code>ctx.reply(...)</code> 或回傳一個 <code>Transition&lt;State&gt;?</code> 都是安全的，跟在一般 scene handler 裡呼叫沒有差別；回傳 <code>nil</code> 代表只做訊息通知、不改變對話狀態：</p>
+<pre><code>ctx.startBackgroundJob(id: "order-\(orderID)") { progress in
+    progress.update("處理中 (1/3)：驗證庫存")
+    try await checkStock()
+    progress.update("處理中 (2/3)：扣款")
+    try await charge()
+} onComplete: { result, taskID, ctx in
+    switch result {
+    case .success:
+        try await ctx.reply("訂單 \(taskID) 處理完成，要繼續下一步嗎？")
+        return .transition(to: .postOrderFollowUp)   // 回傳 transition，讓對話自動往下走
+    case .failure(let error):
+        try await ctx.reply("訂單 \(taskID) 處理失敗：\(error.localizedDescription)")
+        return nil   // 只回訊息，不改變狀態
+    }
+}
+</code></pre>
+<p><strong>通知（<code>ctx.reply(...)</code>）與觸發 transition，這兩件事對「原本的 scene 還在不在」的要求不一樣</strong>，這是常見的誤解點，特別說明：</p>
+<ul>
+  <li><strong>通知一定送得到</strong>：<code>ctx.reply(...)</code> 只需要 <code>chatID</code>，屬於 Transport 層的操作，不管當下對話引擎有沒有 active scene、原本觸發任務的 scene 是否早已 <code>.end</code> 或被 <code>resetConversation()</code> 清空，都不影響——這正是 6.2 節 <code>pendingCompletions</code> 獨立於對話流程欄位之外儲存的原因，對應需求書 US-5／US-6「取消對話不影響背景任務通知」。</li>
+  <li><strong>觸發 transition 則要求原本的 scene 仍然存在</strong>：若任務完成時，使用者原本的 scene 已經被其他 scene 中斷（見 6.1.1 節的 scene 棧），transition 只會作用在它自己所屬的那個 scene 上——若該 scene 目前正被暫停，transition 會套用到暫停的那份記錄，等它被恢復時生效；但若該 scene 當初啟動任務後就直接 <code>.end</code> 了（不再存在），此時回傳非 <code>nil</code> 的 <code>Transition</code> 沒有意義（無處可套用），框架會記一筆 <code>.debug</code> 等級的 log 並忽略它。因此開發者若在啟動任務時就讓 scene <code>.end</code>（例如第 9 節範例的寫法），對應的 <code>onComplete</code> 應該只用來發通知、回傳 <code>nil</code>；只有故意讓 scene 保持存活（例如轉移到一個「等待任務結果」的中繼 state）時，才適合在 <code>onComplete</code> 裡回傳 transition。</li>
+</ul>
+<p>實際的使用者體驗（例如要不要提醒使用者「有一個任務剛結束」、啟動任務後 scene 要不要立刻結束）由開發者在自己的 handler 與 <code>onComplete</code> 裡自行設計，框架只保證上述兩種情境各自的行為是明確、可預期的。</p>
+
+<h2>8. 選單／Inline Keyboard 整合</h2>
+<pre><code>struct InlineButton {
+    let text: String
+    let callbackData: String
+}
+
+func menu(_ text: String, buttons: [[InlineButton]]) -> OutgoingMessage
+</code></pre>
+<p>使用者點擊按鈕產生的 <code>callback_query</code>，會被視為一般 Update 進入同一條處理管線（Access Control → Conversation Engine），對應到目前 chat 所在 state 的 handler，開發者透過 <code>Context</code> 直接讀取被按下的 <code>callbackData</code>，不需要另外注冊 callback handler 或手動比對。</p>
+
+<h3>8.1 全域指令、取消對話（US-5）與 setMyCommands</h3>
+<p>除了 scene 內的 state handler，開發者也可以註冊不屬於任何 scene 的全域指令（例如查詢進度、取消對話）。註冊時可附上 <code>description</code>，TGBot 會在 <code>bot.run()</code> 啟動時自動彙整所有有給 <code>description</code> 的指令，呼叫 Telegram Bot API 的 <code>setMyCommands</code>，讓它們出現在 Telegram 客戶端的「/」指令選單裡；沒給 <code>description</code> 的指令一樣能觸發，只是不會出現在選單中：</p>
+<pre><code>func onCommand(_ name: String, description: String? = nil,
+               handler: @escaping (GlobalContext) async throws -> Void)
+</code></pre>
+<p><code>ctx.resetConversation()</code>（見 6.1 節 <code>GlobalContext</code> 定義）是 US-5 的核心原語，負責清空目前 chat 的 <code>ChatConversationRecord</code>（activeScene／state／session／歷史棧／scene 棧全部重置），回到沒有進行中任務的 idle 狀態。要不要包成指令、指令叫什麼名字、取消後回什麼話，交由開發者決定，框架只保證這個清空動作本身是安全、原子的（跟一般 Update 一樣經過該 chat 自己的 actor 序列化執行）。慣例上建議命名為 <code>/cancel</code>（符合 Telegram bot 生態常見用法）：</p>
+<pre><code>bot.onCommand("cancel", description: "取消目前進行中的流程") { ctx in
+    await ctx.resetConversation()
+    try await ctx.reply("已取消，若要重新開始請再次輸入指令。")
+}
+</code></pre>
+
+<h2>9. 完整範例：從初始化到執行</h2>
+<p>串起前面各節，展示開發者實際會寫的完整程式碼——從 <code>TGBot</code> 初始化到 <code>bot.run()</code>，含 Token 提供方式、scene 註冊、指令、取消、背景任務推播：</p>
+<pre><code>// Bot Token：直接提供字串（A），或用 convenience initializer 讀環境變數（B），擇一即可
+let configuration = TGBot.Configuration(
+    token: "YOUR_BOT_TOKEN",                    // A：直接提供
+    // tokenFromEnv: "TGBOT_TOKEN",             // B：或改用這個 convenience initializer 讀環境變數
+    allowList: AllowList(userIDs: [123456789]), // 選填；不給就是公開模式
+    logLevel: .error                            // 選填，預設值
+)
+let bot = TGBot(configuration: configuration)
+
+// 一個多步驟 scene，對應 US-1（分支）／US-2（rollback）
+enum RegistrationState: ConversationState { case askName, askAge, confirm }
+struct RegistrationData: Codable { var name: String?; var age: Int? }
+
+let registration = Scene<RegistrationState, RegistrationData>(
+    name: "registration",
+    initial: .askName,
+    initialSession: RegistrationData()
+)
+registration.on(.askName) { ctx in
+    try await ctx.reply("你叫什麼名字？")
+    return .transition(to: .askAge)
+}
+registration.on(.askAge) { ctx in
+    guard let age = Int(ctx.text ?? "") else {
+        try await ctx.reply("請輸入數字")
+        return .stay
+    }
+    ctx.session.age = age
+    return .transition(to: .confirm)
+}
+registration.on(.confirm) { ctx in
+    // 收集完必要資訊，啟動背景任務（US-3／US-6）
+    ctx.startBackgroundJob(id: "register-\(ctx.chatID)") { progress in
+        progress.update("處理中")
+        try await saveToDatabase(ctx.session)
+    } onComplete: { result, taskID, ctx in
+        switch result {
+        case .success: try await ctx.reply("註冊完成！")
+        case .failure(let error): try await ctx.reply("註冊失敗：\(error.localizedDescription)")
+        }
+        return nil   // 這裡只回訊息，不需要額外轉移狀態
+    }
+    try await ctx.reply("資料收到了，處理中，完成後會通知你。")
+    return .end
+}
+
+// 進入這個 scene 的觸發方式（bootstrapping）：新 chat 第一次打這個指令即開始
+bot.register(registration, trigger: .command("register"))
+
+// 多個 scene 只是重複呼叫 bot.register(...)，各自獨立、各自的 trigger 決定何時進入，
+// 彼此不需要知道對方存在（例如另一個處理客服工單的流程）：
+// bot.register(supportTicket, trigger: .command("support"))
+
+// 全域指令：查詢、取消（US-5），description 會自動同步進 Telegram 的指令選單
+bot.onCommand("cancel", description: "取消目前進行中的流程") { ctx in
+    await ctx.resetConversation()
+    try await ctx.reply("已取消。")
+}
+
+// 啟動：內部依 configuration 決定用 PollingUpdateSource 或 WebhookUpdateSource，
+// 並自動呼叫 setMyCommands 同步指令選單
+try await bot.run()
+</code></pre>
+<p><code>trigger</code> 的型別定義：</p>
+<pre><code>enum Trigger {
+    case command(String)   // 使用者輸入 /指令 時進入這個 scene
+    // 之後可擴充，例如 .always（每個新 chat 一開始自動進入，不需要特定指令觸發）
+}
+</code></pre>
+<p>沒有註冊對應 <code>trigger</code> 的 Update（例如使用者直接傳一句話，但沒有任何 scene 在等待輸入、也不是已知指令）如何處理，由開發者透過一個可選的 <code>bot.onUnhandled { ctx in ... }</code> fallback 決定（例如回覆使用說明），不設定則靜默忽略。</p>
+
+<h2>10. 部署考量</h2>
+<table>
+  <tr><th>交付形式</th><th>Update 取得方式</th><th>備註</th></tr>
+  <tr>
+    <td>macOS application</td>
+    <td>Polling</td>
+    <td>Polling 迴圈以背景 <code>Task</code> 形式跑在 App 生命週期內，不需要開放任何 port，符合家用網路環境限制。</td>
+  </tr>
+  <tr>
+    <td>Docker image（Linux server）</td>
+    <td>Polling（v1）／Webhook（v2）</td>
+    <td>v1 統一先用 Polling，容器內跑一個常駐 process 即可；v2 若該環境有 domain／反向代理，可切換為 Webhook 提升即時性。</td>
+  </tr>
+</table>
+
+<h2>11. SwiftPM 專案結構（草案）</h2>
+<div class="tree">TGBot/
+├── Package.swift
+├── Sources/
+│   ├── TGBotTransport/       Bot API models、HTTP client、UpdateSource、Clock protocol（供退避重試與其他 target 共用）
+│   ├── TGBotAccessControl/   AccessPolicy、AllowList
+│   ├── TGBotConversation/    Scene、State、StateStore、Context
+│   ├── TGBotBackgroundTask/  BackgroundTaskScheduling protocol、BackgroundTaskManager
+│   └── TGBot/                Umbrella，對外入口
+└── Tests/
+    ├── TGBotConversationTests/
+    └── ...</div>
+
+<h2>12. 未來擴充點（不影響核心架構）</h2>
+<ul>
+  <li><strong>WebhookUpdateSource</strong>：實作 <code>UpdateSource</code> protocol 即可接入，不動 Access Control／Conversation Engine。技術選型上，優先評估 <strong>FlyingFox</strong> 這類不依賴 SwiftNIO、用 Swift Concurrency＋原生 BSD socket 實作的輕量 HTTP server library（支援 Linux／macOS，不會違背第 13 節「Transport 不採用 SwiftNIO」的決策）。這類 library 通常不內建 TLS，但這正好符合第 10 節的部署假設——Webhook 模式本來就設定給「有 domain／反向代理的 Linux server 環境」，TLS 終止交給前面的反向代理處理，TGBot 內部只需處理明文 HTTP 即可。若評估後發現這類輕量方案不敷使用，才退回考慮 SwiftNIO／Vapor 生態，屆時的取捨與最終選型留待 v2 啟動時再評估與驗證（FlyingFox 相對年輕、非 Apple 官方背書，需要屆時重新確認成熟度）。</li>
+  <li><strong>可持久化的 StateStore</strong>：實作 <code>StateStore</code> protocol（例如檔案、Redis），若未來需求改變成「重啟不遺失進度」時可直接替換。</li>
+  <li><strong>async/await 語法糖層</strong>：在 Conversation Engine 之上包一層 <code>ctx.ask()</code> 風格 API，底層仍轉譯為現有的 state 定義，供偏好順序腳本寫法的開發者使用。</li>
+  <li><strong>閒置對話自動過期（TTL）</strong>：v1 刻意不做（見需求書決策記錄），若未來使用規模擴大、記憶體增長成為實際問題，可在 <code>StateStore</code> 之上加一層依 <code>Clock</code>（4.1 節）驅動的定期清掃機制，不需改動 Conversation Engine 核心。</li>
+</ul>
+
+<h2>13. 已確認的技術決策</h2>
+<table>
+  <tr><th>項目</th><th>決策內容</th><th>狀態</th></tr>
+  <tr>
+    <td>最低 Swift 版本</td>
+    <td>訂為 <strong>Swift 6.0</strong>。除了需要 <code>package</code> 存取層級（Swift 5.9+）支援模組邊界設計外，實測發現 Swift 5.9 的 <code>URLSession</code>／<code>FoundationNetworking</code> 在 Linux 上有嚴重的冷啟動卡住問題（見下方測試記錄），Swift 6.0 已修復，因此不支援 5.9。</td>
+    <td><span class="tag confirmed">已確認</span></td>
+  </tr>
+  <tr>
+    <td>Package 結構</td>
+    <td>5 個 target（TGBotTransport／TGBotAccessControl／TGBotConversation／TGBotBackgroundTask／TGBot），但 <code>Package.swift</code> 的 <code>products</code> 只公開 <code>TGBot</code> 一個 library product。內部跨 target 的 API 預設標記 <code>package</code> 存取層級（而非 <code>public</code>），確保就算未來 <code>products</code> 設定變動，內部型別也不會意外外洩；開發者一般只會看到、只會 <code>import</code> 到 <code>TGBot</code> 這一個型別。<strong>例外</strong>：<code>Clock</code>／<code>StateStore</code>／<code>UpdateSource</code>／<code>AccessPolicy</code>／<code>BackgroundTaskScheduling</code> 這五個與可測試性直接相關的 protocol（見 6.6 節）刻意標為 <code>public</code>，讓開發者能在自己的測試目標裡注入假實作，其餘型別維持 <code>package</code>。</td>
+    <td><span class="tag confirmed">已確認</span></td>
+  </tr>
+  <tr>
+    <td>Transport 實作技術</td>
+    <td>使用 <code>URLSession</code>（Linux 上對應 <code>import FoundationNetworking</code>），不採用 SwiftNIO／AsyncHTTPClient 生態。已透過官方 Docker image 實測驗證可行（見下方測試記錄）。</td>
+    <td><span class="tag confirmed">已確認</span></td>
+  </tr>
+  <tr>
+    <td>Session／State 資料型別</td>
+    <td><code>Scene</code>／<code>Context</code> 對 Session 型別採泛型設計，要求遵循內建的 <code>Codable</code> protocol（非自訂 protocol），開發者自行定義每個 scene 的 session struct，換取編譯期型別安全。對不需要 session 的 scene，泛型參數提供內建的 <code>EmptySession: Codable</code> 作為預設值（<code>Session: Codable = EmptySession</code>），開發者可直接省略，無需額外樣板碼。<code>ConversationState</code> 同樣要求 <code>Codable</code>（而不只是 <code>Hashable</code>），確保它跟 Session 能用同一套 <code>Data</code> 型別擦除手法儲存，兩者擦除機制保持一致（見 6.1／6.2 節）。</td>
+    <td><span class="tag confirmed">已確認</span></td>
+  </tr>
+  <tr>
+    <td>錯誤處理策略</td>
+    <td>Logging 採用 <code>swift-log</code>，預設 log level 為 <code>.error</code>、可由開發者設定為其他等級。Scene handler 拋出未接住的錯誤時，統一記 log + 自動 <code>.rollback()</code> 回上一個安全狀態，並提供可選的 <code>bot.onError</code> hook 讓開發者自訂通知或監控行為（見 6.5 節）。</td>
+    <td><span class="tag confirmed">已確認</span></td>
+  </tr>
+  <tr>
+    <td>API 呼叫容錯策略</td>
+    <td>一次性呼叫（如 <code>sendMessage</code>）不重試，失敗立即拋出交由開發者處理；<code>getUpdates</code>（Polling 迴圈）永不放棄，改用退避延遲、連續失敗達上限（預設 5 次）後延遲封頂不再拉長，成功後歸零重來（見 4.1 節）。</td>
+    <td><span class="tag confirmed">已確認</span></td>
+  </tr>
+  <tr>
+    <td>白名單行為</td>
+    <td><code>AllowList</code> 為 opt-in：未設定＝公開，設定後自動轉私人模式；名單外請求收到明確拒絕回覆（可覆寫文字），而非靜默忽略（見第 5 節，對應 US-4）。</td>
+    <td><span class="tag confirmed">已確認</span></td>
+  </tr>
+  <tr>
+    <td>閒置對話過期</td>
+    <td>v1 不實作 TTL／自動清除，列為未來擴充點（見第 12 節）。</td>
+    <td><span class="tag confirmed">已確認</span></td>
+  </tr>
+  <tr>
+    <td>Bot Token 配置</td>
+    <td>以字串參數為主（<code>Configuration(token:)</code>），另提供讀環境變數的 convenience initializer（<code>Configuration(tokenFromEnv:)</code>）當語法糖，不規定特定配置檔格式（見第 9 節範例）。</td>
+    <td><span class="tag confirmed">已確認</span></td>
+  </tr>
+  <tr>
+    <td>取消對話與指令選單</td>
+    <td><code>ctx.resetConversation()</code> 為 US-5 核心原語，是否包成指令、指令怎麼命名交給開發者（建議 <code>/cancel</code>）。<code>bot.onCommand(_:description:)</code> 的 <code>description</code> 會在 <code>bot.run()</code> 時自動同步至 Telegram 的 <code>setMyCommands</code>（見 8.1 節）。</td>
+    <td><span class="tag confirmed">已確認</span></td>
+  </tr>
+  <tr>
+    <td>背景任務通知（US-6）</td>
+    <td>背景任務結束時可透過 <code>onComplete</code> 主動推送訊息／觸發轉移，此事件經由該 chat 自己的 conversation actor 序列化執行，避免與一般 Update 處理產生 race condition。<code>onComplete</code> 帶有 <code>taskID</code>，讓開發者在多個背景任務並存時能辨識是哪一個完成了（見 7、7.1 節）。取消對話（US-5）或原本的 scene 已 <code>.end</code> 皆只清空對話流程欄位，<code>pendingCompletions</code>（見 6.2 節）獨立保存、不受影響，通知一定送達；但觸發 transition 仍要求原本的 scene 存在（見 7.1 節）。</td>
+    <td><span class="tag confirmed">已確認</span></td>
+  </tr>
+  <tr>
+    <td>可測試性設計</td>
+    <td>v1 即納入：時間來源抽成可注入的 <code>Clock</code> protocol、<code>BackgroundTaskManager</code> 改為先定義 protocol（<code>BackgroundTaskScheduling</code>）再提供預設實作，其餘核心元件（<code>StateStore</code>／<code>UpdateSource</code>／<code>AccessPolicy</code>）本身已是 protocol（見 6.6 節）。</td>
+    <td><span class="tag confirmed">已確認</span></td>
+  </tr>
+  <tr>
+    <td>版本相容性與文件承諾</td>
+    <td>1.0 後遵循標準 SemVer；v1 發布的硬性條件為 README quickstart（見第 9 節範例）與核心 public API 的 doc comment，範例專案可 1.0 後再補。</td>
+    <td><span class="tag confirmed">已確認</span></td>
+  </tr>
+</table>
+
+<h3>13.1 測試記錄：URLSession 在 Linux Docker 下的穩定性</h3>
+<p>因應開發者過往經驗「重複部署 container 後 URLSession 偶爾會卡住無回應」，實際用官方 <code>swift</code> Docker image（一般動態鏈結，非 Static Linux SDK）對 <code>https://api.telegram.org</code> 發送真實 HTTPS 請求驗證，測試方式為：(a) 同一個 process 內連續發送 8 次請求；(b) 5 次獨立重啟 container，每次各發送 1 次請求。結果：</p>
+<table>
+  <tr><th>測試</th><th>Swift 5.9.2</th><th>Swift 6.0.3</th></tr>
+  <tr>
+    <td>同一 process 連續 8 次請求</td>
+    <td>第 1、2 次各卡住 15 秒 timeout，第 3 次起才恢復正常</td>
+    <td>8/8 全部成功，無卡住</td>
+  </tr>
+  <tr>
+    <td>5 次獨立重啟 container</td>
+    <td>5/5 全部卡住 20 秒 timeout，無一次成功</td>
+    <td>5/5 全部成功，每次 3～4 秒</td>
+  </tr>
+</table>
+<p>結論：Swift 5.9 的 <code>URLSession</code> 在 Linux 上，process 剛啟動時的前幾次請求有很高機率卡住，這與開發者過往觀察到的現象吻合；Swift 6.0 未重現此問題。因此本專案採用的 Docker 部署方式（一般動態鏈結）搭配 Swift 6.0 是可行且穩定的，同時排除了 Static Linux SDK（全靜態鏈結）路徑目前已知的相容性問題（見需求討論記錄）。</p>
+
+<h2>14. 下一步</h2>
+<p>本文件所列技術決策已全數確認，無未決事項。可以開始建立 SwiftPM 專案骨架，並從 TGBotTransport（Bot API 封裝）與 TGBotConversation（對話引擎核心）開始實作。</p>
+
+<footer>此文件依《TGBot 需求書 v1.4》產出，架構將隨討論持續調整。</footer>
+
+</main>
+</body>
+</html>
