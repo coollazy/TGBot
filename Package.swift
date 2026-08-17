@@ -52,6 +52,14 @@ let package = Package(
         .testTarget(
             name: "TGBotTransportTests",
             dependencies: ["TGBotTransport"]
+        ),
+        .testTarget(
+            name: "TGBotAccessControlTests",
+            dependencies: ["TGBotAccessControl"]
+        ),
+        .testTarget(
+            name: "TGBotBackgroundTaskTests",
+            dependencies: ["TGBotBackgroundTask", "TGBotConversation"]
         )
     ]
 )
