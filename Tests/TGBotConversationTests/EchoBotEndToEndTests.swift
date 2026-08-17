@@ -12,10 +12,10 @@ struct EchoBotEndToEndTests {
     enum EchoState: ConversationState { case listening }
 
     final class RecordingAPIClient: TelegramAPIClient, @unchecked Sendable {
-        private(set) var sentMessages: [(chatID: Int64, text: String)] = []
+        private(set) var sentMessages: [(chatID: Int64, text: String, buttons: [[TGInlineKeyboardButton]]?)] = []
 
-        func sendMessage(chatID: Int64, text: String) async throws {
-            sentMessages.append((chatID, text))
+        func sendMessage(chatID: Int64, text: String, inlineKeyboard: [[TGInlineKeyboardButton]]?) async throws {
+            sentMessages.append((chatID, text, inlineKeyboard))
         }
         func getUpdates(offset: Int?, timeout: Int) async throws -> [Update] { [] }
         func setMyCommands(_ commands: [(name: String, description: String)]) async throws {}

@@ -36,8 +36,10 @@ public class GlobalContext: @unchecked Sendable {
     }
 
     public func replyWithMenu(_ text: String, buttons: [[InlineButton]]) async throws {
-        // TODO: 實作帶 inline keyboard 的 sendMessage，見架構設計文件第 8 節
-        try await apiClient.sendMessage(chatID: chatID, text: text)
+        let rows = buttons.map { row in
+            row.map { TGInlineKeyboardButton(text: $0.text, callbackData: $0.callbackData) }
+        }
+        try await apiClient.sendMessage(chatID: chatID, text: text, inlineKeyboard: rows)
     }
 
     /// US-5：清空目前 chat 的 scene/state/session/歷史棧/scene 棧，回到 idle。
