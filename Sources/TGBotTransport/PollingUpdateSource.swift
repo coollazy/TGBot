@@ -27,8 +27,10 @@ public final class PollingUpdateSource: UpdateSource, @unchecked Sendable {
                     await backoff.recordSuccess()
                     for update in updates {
                         await onUpdate(update)
+                        // getUpdates 的 offset 語意是「回傳這個值之後的所有 update」，
+                        // 所以要設成已處理的最大 update_id + 1，避免下次重複拿到同一筆
+                        offset = Int(update.updateID) + 1
                     }
-                    // TODO: 依實際 Telegram Update.update_id 更新 offset
                 } catch {
                     logger.error("getUpdates failed, backing off: \(error)")
                     await backoff.recordFailure()
