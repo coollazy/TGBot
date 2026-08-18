@@ -54,12 +54,52 @@ public final class Context<State: ConversationState, Session: Codable & Sendable
         onComplete: @escaping @Sendable (JobResult, String, Context<State, Session>) async throws -> Transition<State>?
     ) {
         Task {
-            // 把型別安全的 onComplete 用型別擦除包起來，存進這個 chat 的 pendingCompletions（6.2 節）
-            await engine.registerPendingCompletion(chatID: chatID, taskID: id) { [weak self] result in
-                guard let self else { return }
+            // 把型別安全的 onComplete 用型別擦除包起來，存進這個 chat 的 pendingCompletions（6.2 節）。
+            //
+            // 這裡刻意強引用 self（不是 [weak self]）：原本用 weak 是想避免 self（Context）
+            // 跟 engine 互相持有造成的循環引用，但這個閉包本來就是「等真的任務完成才會被呼叫」，
+            // 如果排程器是真的異步完成（例如真正的 BackgroundTaskManager，或這裡改用的
+            // ManualScheduler 測試），呼叫這個 startBackgroundJob 的那個 Task 執行完就結束了，
+            // 沒有其他東西強引用 self，self 會在任務真的完成之前就被釋放，導致這個
+            // guard let self 直接失敗、onComplete 整個靜默不會被呼叫——連「通知一定送達」
+            // 這個背景任務最基本的承諾都會破功。是這次新加的、用會真的延遲觸發完成的排程器
+            // 測試才抓到的，之前的測試全部用「一啟動就同步完成」的假排程器，剛好都繞過了
+            // 這個窗口，沒有真的測到延遲完成的情況。循環引用的代價（只有在任務完成通知
+            // 永遠沒被送達的情況下才會真的洩漏）遠比「通知靜默消失」這個核心保證破功要小，
+            // 所以選擇強引用。
+            await engine.registerPendingCompletion(chatID: chatID, taskID: id) { [self] result in
                 if let transition = try await onComplete(result, id, self) {
-                    // TODO: 實作把 transition 套用回這個 scene 的邏輯，見架構設計文件 7.1 節
-                    _ = transition
+                    // 在這裡（還是具體的 State/Session 型別）編碼成引擎看得懂的擦除後格式，
+                    // 呼叫 applyBackgroundTransition 套用回對話狀態——只有原本的 scene 仍然
+                    // active 時才會真的生效，見 ConversationEngineHandle 的說明。
+                    let encoder = JSONEncoder()
+                    let kind: TransitionKind
+                    let newStateData: Data?
+                    switch transition {
+                    case .transition(to: let newState):
+                        kind = .moved
+                        newStateData = try encoder.encode(newState)
+                    case .stay:
+                        kind = .stayed
+                        newStateData = nil
+                    case .rollback:
+                        kind = .rolledBack
+                        newStateData = nil
+                    case .end:
+                        kind = .ended
+                        newStateData = nil
+                    case .interrupt:
+                        kind = .interrupted
+                        newStateData = nil
+                    }
+                    let newSessionData = try encoder.encode(self.session)
+                    await engine.applyBackgroundTransition(
+                        chatID: self.chatID,
+                        sceneName: self.sceneName,
+                        kind: kind,
+                        newStateData: newStateData,
+                        newSessionData: newSessionData
+                    )
                 }
             }
             // 交給排程器的是不帶型別的版本，排程器完成後只需要「通知引擎去處理」

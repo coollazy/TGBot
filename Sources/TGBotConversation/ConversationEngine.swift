@@ -1,3 +1,4 @@
+import Foundation
 import TGBotTransport
 import Logging
 
@@ -55,6 +56,46 @@ public actor ConversationEngine: ConversationEngineHandle {
     public func deliverBackgroundJobResult(chatID: Int64, taskID: String, result: JobResult) async {
         guard let completion = pendingCompletions[chatID]?.removeValue(forKey: taskID) else { return }
         try? await completion(result)
+    }
+
+    package func applyBackgroundTransition(
+        chatID: Int64,
+        sceneName: String,
+        kind: TransitionKind,
+        newStateData: Data?,
+        newSessionData: Data
+    ) async {
+        var record = await stateStore.load(chatID: chatID)
+        guard record.activeScene == sceneName else {
+            // 使用者可能在背景任務跑的期間已經 /cancel、或觸發別的全域指令切走了，這種情況下
+            // 不該把已經跑完的舊流程結果硬套回目前的對話狀態——通知一定已經送達（見
+            // deliverBackgroundJobResult／startBackgroundJob 的 reply 那條路徑），這裡只影響
+            // 「要不要順便觸發狀態轉移」，跳過不算漏做事。
+            logger.debug("applyBackgroundTransition: scene \(sceneName) is no longer active for chat \(chatID), skipping")
+            return
+        }
+        switch kind {
+        case .moved:
+            record.currentStateData = newStateData
+            record.sessionData = newSessionData
+            await stateStore.save(chatID: chatID, record)
+        case .stayed, .rolledBack:
+            // Context 本身沒有保存「目前的 state」（開發者在 onComplete 裡拿到的 Context 只
+            // 帶 session），所以這裡沒有東西可以重新編碼進 currentStateData，維持原樣不動；
+            // 只更新 session（開發者可能在 onComplete 裡改了 ctx.session）。
+            // 已知取捨：如果使用者在背景任務執行期間、於同一個 scene 內又往下走了幾步、
+            // session 也跟著被改過，這裡會用背景任務啟動當下那份舊的 session 覆蓋掉——
+            // 這個時間窗口的資料競爭目前沒有處理，留待有實際需求再評估怎麼做（例如欄位級合併）。
+            record.sessionData = newSessionData
+            await stateStore.save(chatID: chatID, record)
+        case .ended:
+            record.reset()
+            await stateStore.save(chatID: chatID, record)
+        case .interrupted:
+            // 背景任務完成時觸發 interrupt 語意不明確（scene 棧的操作預期只發生在正常 dispatch
+            // 路徑），現在不支援，安靜忽略＋記 log，不要推進一個沒有配套流程能接住的狀態。
+            logger.debug("applyBackgroundTransition: .interrupted from a background job completion is not supported, ignoring")
+        }
     }
 
     // MARK: - Dispatch（核心）

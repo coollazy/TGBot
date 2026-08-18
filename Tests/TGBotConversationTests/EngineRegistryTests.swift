@@ -27,6 +27,10 @@ struct EngineRegistryTests {
             completion: @escaping @Sendable (JobResult) async throws -> Void
         ) async {}
         func deliverBackgroundJobResult(chatID: Int64, taskID: String, result: JobResult) async {}
+        func applyBackgroundTransition(
+            chatID: Int64, sceneName: String, kind: TransitionKind,
+            newStateData: Data?, newSessionData: Data
+        ) async {}
     }
 
     func makeGlobalContext() -> GlobalContext {

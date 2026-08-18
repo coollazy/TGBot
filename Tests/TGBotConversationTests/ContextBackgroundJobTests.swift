@@ -7,10 +7,6 @@ import TGBotTransport
 /// deliverBackgroundJobResult，繞過了開發者實際會呼叫的公開 API
 /// Context.startBackgroundJob(id:work:onComplete:)——這個函式本體一次都沒被跑過。
 /// 這裡透過真正的 dispatch 路徑（scene handler 裡呼叫 ctx.startBackgroundJob）驗證。
-///
-/// 已知限制（見 Context.swift 內的 TODO）：onComplete 回傳的 Transition 目前還沒有被
-/// 套用回對話狀態，只有「通知」這條路徑（ctx.reply 等）是真的接起來的——這裡的測試
-/// 只驗證目前真正實作的部分，不假裝 transition 套用已經完成。
 @Suite("Context.startBackgroundJob")
 struct ContextBackgroundJobTests {
     enum State: ConversationState { case main }
@@ -50,6 +46,13 @@ struct ContextBackgroundJobTests {
     func waitUntil(maxAttempts: Int = 200, _ condition: () -> Bool) async {
         for _ in 0..<maxAttempts {
             if condition() { return }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+    }
+
+    func waitUntil(maxAttempts: Int = 200, _ condition: () async -> Bool) async {
+        for _ in 0..<maxAttempts {
+            if await condition() { return }
             try? await Task.sleep(nanoseconds: 1_000_000)
         }
     }
@@ -166,5 +169,118 @@ struct ContextBackgroundJobTests {
         await engine.dispatch(update: Update(updateID: 1, chatID: 1, text: "/status", commandName: "status"))
 
         #expect(apiClient.sentMessages.last?.text == "known=70% 完成 unknown=true")
+    }
+
+    /// 手動控制何時觸發 onComplete 的排程器：不像 InstantScheduler 一啟動就立刻完成，
+    /// 讓測試能在「任務還沒完成」跟「任務完成」中間插入別的動作（例如模擬使用者 /cancel），
+    /// 這是驗證 Phase 2（transition 套用回對話狀態）需要的時序控制。
+    actor ManualScheduler: BackgroundTaskScheduling {
+        private var pendingCompletions: [String: @Sendable (JobResult) async throws -> Void] = [:]
+
+        private func key(_ chatID: Int64, _ taskID: String) -> String { "\(chatID):\(taskID)" }
+
+        func start(
+            chatID: Int64, taskID: String,
+            work: @escaping @Sendable (JobProgress) async throws -> Void,
+            onComplete: @escaping @Sendable (JobResult) async throws -> Void
+        ) async {
+            pendingCompletions[key(chatID, taskID)] = onComplete
+        }
+        func status(chatID: Int64, taskID: String) async -> JobStatus? { nil }
+
+        func hasPending(chatID: Int64, taskID: String) -> Bool {
+            pendingCompletions[key(chatID, taskID)] != nil
+        }
+        func trigger(chatID: Int64, taskID: String, result: JobResult) async {
+            guard let completion = pendingCompletions.removeValue(forKey: key(chatID, taskID)) else { return }
+            try? await completion(result)
+        }
+    }
+
+    @Test("onComplete's .transition(to:) is applied: the next dispatch runs the new state's handler (inside)")
+    func onCompleteTransitionAdvancesConversationState() async throws {
+        enum JobState: ConversationState { case main, done }
+
+        let apiClient = RecordingAPIClient()
+        let registry = EngineRegistry()
+        let scheduler = ManualScheduler()
+        let engine = ConversationEngine(
+            stateStore: InMemoryStateStore(),
+            apiClient: apiClient,
+            scheduler: scheduler,
+            logger: Logger(label: "test"),
+            registry: registry
+        )
+
+        let scene = Scene<JobState, EmptySession>(name: "job", initial: .main)
+        scene.on(.main) { ctx in
+            ctx.startBackgroundJob(id: "t3", work: { _ in }, onComplete: { _, _, _ in
+                .transition(to: .done)
+            })
+            return .stay
+        }
+        scene.on(.done) { ctx in
+            try await ctx.reply("reached done state")
+            return .end
+        }
+        registry.registerScene(scene, commandTrigger: "job")
+
+        await engine.dispatch(update: Update(updateID: 1, chatID: 1, text: "/job", commandName: "job"))
+        await waitUntil { await scheduler.hasPending(chatID: 1, taskID: "t3") }
+
+        await scheduler.trigger(chatID: 1, taskID: "t3", result: .success)
+        // 這個 onComplete 本身不會送任何訊息（只回傳 transition），沒有訊息可以拿來 waitUntil，
+        // 給 fire-and-forget 的 applyBackgroundTransition 一點時間真的把 record 存回 StateStore
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        // 下一輪隨便一句話：如果 transition 真的套用了，這輪應該直接命中 .done 的 handler
+        // （因為 .main 只會 .stay，不會自己主動回話說 "reached done state"）
+        await engine.dispatch(update: Update(updateID: 2, chatID: 1, text: "anything"))
+
+        #expect(apiClient.sentMessages.contains { $0.text == "reached done state" })
+    }
+
+    @Test("onComplete's transition is NOT applied if the user already left the scene, e.g. via /cancel (outside)")
+    func onCompleteTransitionSkippedWhenSceneNoLongerActive() async throws {
+        enum JobState: ConversationState { case main, done }
+
+        let apiClient = RecordingAPIClient()
+        let registry = EngineRegistry()
+        let scheduler = ManualScheduler()
+        let engine = ConversationEngine(
+            stateStore: InMemoryStateStore(),
+            apiClient: apiClient,
+            scheduler: scheduler,
+            logger: Logger(label: "test"),
+            registry: registry
+        )
+
+        let scene = Scene<JobState, EmptySession>(name: "job", initial: .main)
+        scene.on(.main) { ctx in
+            ctx.startBackgroundJob(id: "t4", work: { _ in }, onComplete: { _, _, _ in
+                .transition(to: .done)
+            })
+            return .stay
+        }
+        scene.on(.done) { ctx in
+            try await ctx.reply("reached done state")
+            return .end
+        }
+        registry.registerScene(scene, commandTrigger: "job")
+
+        await engine.dispatch(update: Update(updateID: 1, chatID: 1, text: "/job", commandName: "job"))
+        await waitUntil { await scheduler.hasPending(chatID: 1, taskID: "t4") }
+
+        // 模擬使用者在任務跑的期間，用 /cancel 離開了這個 scene（見 GlobalContext.resetConversation）
+        await engine.resetConversation(chatID: 1)
+
+        await scheduler.trigger(chatID: 1, taskID: "t4", result: .success)
+        // 給 fire-and-forget 的套用邏輯一點時間跑完（就算它什麼都不該做）
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        // 使用者已經不在 "job" scene 裡了，這輪不該命中 .done 的 handler
+        await engine.dispatch(update: Update(updateID: 2, chatID: 1, text: "anything"))
+
+        #expect(!apiClient.sentMessages.contains { $0.text == "reached done state" })
     }
 }
