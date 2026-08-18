@@ -78,6 +78,7 @@ extension Update {
         let text: String?
         let callbackData: String?
         let callbackQueryID: String?
+        let messageID: Int64?
 
         if let message = raw.message {
             chatID = message.chat.id
@@ -85,18 +86,21 @@ extension Update {
             text = message.text
             callbackData = nil
             callbackQueryID = nil
+            messageID = message.messageID
         } else if let callbackQuery = raw.callbackQuery {
             chatID = callbackQuery.message?.chat.id ?? 0
             userID = callbackQuery.from.id
             text = nil
             callbackData = callbackQuery.data
             callbackQueryID = callbackQuery.id
+            messageID = callbackQuery.message?.messageID
         } else {
             chatID = 0
             userID = nil
             text = nil
             callbackData = nil
             callbackQueryID = nil
+            messageID = nil
         }
 
         var commandName: String?
@@ -113,7 +117,8 @@ extension Update {
             text: text,
             callbackData: callbackData,
             commandName: commandName,
-            callbackQueryID: callbackQueryID
+            callbackQueryID: callbackQueryID,
+            messageID: messageID
         )
     }
 }

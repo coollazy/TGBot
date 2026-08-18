@@ -215,4 +215,22 @@ struct URLSessionTelegramAPIClientTests {
         #expect(json["callback_query_id"] as? String == "cb-42")
         #expect(json["text"] as? String == "已收到")
     }
+
+    @Test("editMessageReplyMarkup: request body carries chat_id/message_id but no reply_markup key (inside)")
+    func editMessageReplyMarkupOmitsReplyMarkup() async throws {
+        // 故意不帶 reply_markup 欄位：這是讓 Telegram 把整個 inline keyboard 拿掉的方式
+        // （用來實現「舊按鈕點過就不能再點」，見 ConversationEngine.dispatch）。
+        MockURLProtocol.handler = { _ in
+            (200, #"{"ok":true,"result":{"message_id":999,"chat":{"id":42},"text":"pick"}}"#.data(using: .utf8)!)
+        }
+        let client = makeClient()
+
+        try await client.editMessageReplyMarkup(chatID: 42, messageID: 999)
+
+        let body = try #require(MockURLProtocol.capturedBody)
+        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(json["chat_id"] as? Int64 == 42)
+        #expect(json["message_id"] as? Int64 == 999)
+        #expect(json["reply_markup"] == nil)
+    }
 }

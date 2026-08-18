@@ -23,6 +23,7 @@ struct ContextBackgroundJobTests {
         func getUpdates(offset: Int?, timeout: Int) async throws -> [Update] { [] }
         func setMyCommands(_ commands: [(name: String, description: String)]) async throws {}
         func answerCallbackQuery(callbackQueryID: String, text: String?) async throws {}
+        func editMessageReplyMarkup(chatID: Int64, messageID: Int64) async throws {}
     }
 
     /// 任務「瞬間完成」的排程器：呼叫 work、再呼叫 onComplete，不另外拉一個真的異步

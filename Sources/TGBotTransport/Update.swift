@@ -15,6 +15,11 @@ public struct Update: Sendable {
     /// ——這個欄位就是用來讓框架能自動做這件事，開發者不需要自己管。
     public let callbackQueryID: String?
 
+    /// 這則 update 對應到的訊息 ID：文字訊息是那則訊息本身，callback_query 則是「按鈕
+    /// 所在的那則訊息」。框架用它在收到按鈕點擊後自動把按鈕拿掉（editMessageReplyMarkup），
+    /// 避免使用者回頭誤點已經處理過的舊按鈕、跟目前對話狀態對不上而出現莫名其妙的回覆。
+    public let messageID: Int64?
+
     public init(
         updateID: Int64 = 0,
         chatID: Int64,
@@ -22,7 +27,8 @@ public struct Update: Sendable {
         text: String? = nil,
         callbackData: String? = nil,
         commandName: String? = nil,
-        callbackQueryID: String? = nil
+        callbackQueryID: String? = nil,
+        messageID: Int64? = nil
     ) {
         self.updateID = updateID
         self.chatID = chatID
@@ -31,5 +37,6 @@ public struct Update: Sendable {
         self.callbackData = callbackData
         self.commandName = commandName
         self.callbackQueryID = callbackQueryID
+        self.messageID = messageID
     }
 }

@@ -88,6 +88,14 @@ public actor ConversationEngine: ConversationEngineHandle {
         // dispatch 因此中斷；正常的 handler 邏輯還是要照跑。
         if let callbackQueryID = update.callbackQueryID {
             try? await apiClient.answerCallbackQuery(callbackQueryID: callbackQueryID)
+
+            // 同時把按鈕所在那則舊訊息的 inline keyboard 拿掉，避免使用者事後回頭誤點
+            // 已經處理過的按鈕——那個點擊還是會產生合法的 callback_query，但會被目前的
+            // 對話狀態誤判成別的意思，跳出文不對題的回覆。跟上面一樣用 try?，失敗
+            // （例如訊息太舊、已經被使用者刪除）不該擋住正常的 handler 邏輯繼續跑。
+            if let messageID = update.messageID {
+                try? await apiClient.editMessageReplyMarkup(chatID: update.chatID, messageID: messageID)
+            }
         }
 
         logger.debug("dispatch: chat=\(update.chatID) command=\(update.commandName ?? "nil") text=\(update.text ?? "nil") callbackData=\(update.callbackData ?? "nil") callbackQueryID=\(update.callbackQueryID ?? "nil")")

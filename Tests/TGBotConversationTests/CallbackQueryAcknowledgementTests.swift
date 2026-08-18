@@ -14,6 +14,7 @@ struct CallbackQueryAcknowledgementTests {
     final class RecordingAPIClient: TelegramAPIClient, @unchecked Sendable {
         private(set) var sentMessages: [(chatID: Int64, text: String)] = []
         private(set) var acknowledgedCallbackQueryIDs: [String] = []
+        private(set) var editedReplyMarkups: [(chatID: Int64, messageID: Int64)] = []
 
         func sendMessage(chatID: Int64, text: String, inlineKeyboard: [[TGInlineKeyboardButton]]?) async throws {
             sentMessages.append((chatID, text))
@@ -22,6 +23,9 @@ struct CallbackQueryAcknowledgementTests {
         func setMyCommands(_ commands: [(name: String, description: String)]) async throws {}
         func answerCallbackQuery(callbackQueryID: String, text: String?) async throws {
             acknowledgedCallbackQueryIDs.append(callbackQueryID)
+        }
+        func editMessageReplyMarkup(chatID: Int64, messageID: Int64) async throws {
+            editedReplyMarkups.append((chatID, messageID))
         }
     }
 
@@ -65,6 +69,31 @@ struct CallbackQueryAcknowledgementTests {
         #expect(apiClient.sentMessages[1].text == "got: go")
     }
 
+    @Test("a callback_query update also strips the inline keyboard off the original message (inside)")
+    func callbackQueryUpdateStripsOldKeyboard() async throws {
+        // 使用者確認評論裡指出的真實體驗問題：按過的按鈕如果還留著可以點，回頭誤點
+        // 會被目前的對話狀態誤判成別的意思、跳出文不對題的回覆。修法是收到 callback_query
+        // 就自動把那則舊訊息的 inline keyboard 拿掉，開發者不需要自己想到這件事。
+        let apiClient = RecordingAPIClient()
+        let (engine, registry) = makeEngine(apiClient)
+
+        let scene = Scene<State, EmptySession>(name: "pick", initial: .only)
+        scene.on(.only) { ctx in
+            try await ctx.reply("got: \(ctx.callbackData ?? "")")
+            return .stay
+        }
+        registry.registerScene(scene, commandTrigger: "pick")
+
+        await engine.dispatch(update: Update(updateID: 1, chatID: 1, text: "/pick", commandName: "pick"))
+        await engine.dispatch(update: Update(
+            updateID: 2, chatID: 1, callbackData: "go", callbackQueryID: "cb-1", messageID: 999
+        ))
+
+        #expect(apiClient.editedReplyMarkups.count == 1)
+        #expect(apiClient.editedReplyMarkups[0].chatID == 1)
+        #expect(apiClient.editedReplyMarkups[0].messageID == 999)
+    }
+
     @Test("a plain text update never triggers answerCallbackQuery (outside: nothing to acknowledge)")
     func plainTextUpdateDoesNotAcknowledge() async throws {
         let apiClient = RecordingAPIClient()
@@ -80,6 +109,7 @@ struct CallbackQueryAcknowledgementTests {
         await engine.dispatch(update: Update(updateID: 1, chatID: 1, text: "/echo", commandName: "echo"))
 
         #expect(apiClient.acknowledgedCallbackQueryIDs.isEmpty)
+        #expect(apiClient.editedReplyMarkups.isEmpty)
     }
 
     @Test("acknowledgement failure doesn't block the rest of dispatch (boundary: stale/expired callback query)")
@@ -95,6 +125,7 @@ struct CallbackQueryAcknowledgementTests {
             func answerCallbackQuery(callbackQueryID: String, text: String?) async throws {
                 throw AckError() // 模擬 Telegram 拒絕（例如 query 太舊）
             }
+            func editMessageReplyMarkup(chatID: Int64, messageID: Int64) async throws {}
         }
         let apiClient = FailingAckAPIClient()
         let (engine, registry) = makeEngine(apiClient)

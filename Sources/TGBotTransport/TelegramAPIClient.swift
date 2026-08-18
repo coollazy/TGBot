@@ -29,6 +29,11 @@ public protocol TelegramAPIClient: Sendable {
     /// 卡在「處理中」的視覺狀態——即使機器人其實已經正常處理完、也回了新訊息。
     /// text 是可選的小提示（會用 toast 顯示在使用者畫面上），大多數情況不需要，見 extension 的語法糖版本。
     func answerCallbackQuery(callbackQueryID: String, text: String?) async throws
+
+    /// 拿掉指定訊息上的 inline keyboard。用在使用者點擊按鈕、流程往下走之後，讓那則舊訊息
+    /// 的按鈕不能再被點——不然使用者回頭誤點已經處理過的按鈕，會被目前的對話狀態誤判成
+    /// 別的意思，跳出文不對題的回覆。見 ConversationEngine.dispatch。
+    func editMessageReplyMarkup(chatID: Int64, messageID: Int64) async throws
 }
 
 extension TelegramAPIClient {
@@ -148,6 +153,24 @@ public final class URLSessionTelegramAPIClient: TelegramAPIClient, @unchecked Se
             path: "answerCallbackQuery",
             body: Body(callbackQueryID: callbackQueryID, text: text),
             responseType: Bool.self
+        )
+    }
+
+    public func editMessageReplyMarkup(chatID: Int64, messageID: Int64) async throws {
+        struct Body: Encodable {
+            let chatID: Int64
+            let messageID: Int64
+            enum CodingKeys: String, CodingKey {
+                case chatID = "chat_id"
+                case messageID = "message_id"
+            }
+        }
+        // 故意不帶 reply_markup 欄位：Telegram 收到沒有這個欄位的 editMessageReplyMarkup
+        // 會直接把整個 inline keyboard 拿掉，正是這裡要的效果（讓按鈕消失、不能再被點）。
+        _ = try await post(
+            path: "editMessageReplyMarkup",
+            body: Body(chatID: chatID, messageID: messageID),
+            responseType: TGMessage.self
         )
     }
 

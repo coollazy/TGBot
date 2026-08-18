@@ -58,13 +58,17 @@ struct UpdateMappingTests {
         // callbackQueryID 一定要正確帶出來，answerCallbackQuery 需要靠它才能確認收到
         // （這是實機測試發現「按鈕點了沒反應」才補上的欄位，之前沒有這個 field 可以測）
         #expect(update.callbackQueryID == "cb1")
+        // messageID 要從「按鈕所在的那則訊息」取得，不是別的地方——框架靠它事後把
+        // 舊按鈕拿掉（editMessageReplyMarkup），拿錯訊息會變成把不相干的訊息改掉
+        #expect(update.messageID == 1)
     }
 
-    @Test("a plain message update has no callbackQueryID (boundary: text path shouldn't try to ack anything)")
+    @Test("a plain message update has no callbackQueryID, but does carry its own messageID (boundary: text path shouldn't try to ack anything)")
     func messageUpdateHasNoCallbackQueryID() {
-        let raw = TGUpdate(updateID: 1, message: TGMessage(messageID: 1, from: nil, chat: TGChat(id: 42), text: "hi"), callbackQuery: nil)
+        let raw = TGUpdate(updateID: 1, message: TGMessage(messageID: 5, from: nil, chat: TGChat(id: 42), text: "hi"), callbackQuery: nil)
         let update = Update(from: raw)
         #expect(update.callbackQueryID == nil)
+        #expect(update.messageID == 5)
     }
 
     @Test("neither message nor callback_query present: falls back to chatID 0, no crash (outside/degenerate)")

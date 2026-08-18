@@ -20,6 +20,7 @@ struct SceneTransitionTests {
         func getUpdates(offset: Int?, timeout: Int) async throws -> [Update] { [] }
         func setMyCommands(_ commands: [(name: String, description: String)]) async throws {}
         func answerCallbackQuery(callbackQueryID: String, text: String?) async throws {}
+        func editMessageReplyMarkup(chatID: Int64, messageID: Int64) async throws {}
     }
 
     struct NoOpScheduler: BackgroundTaskScheduling {
