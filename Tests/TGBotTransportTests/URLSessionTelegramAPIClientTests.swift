@@ -1,5 +1,8 @@
 import Testing
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 @testable import TGBotTransport
 
 /// URLSessionTelegramAPIClient 是真正會發 HTTP 請求、編解碼 JSON 的地方，先前完全沒被
@@ -20,8 +23,11 @@ struct URLSessionTelegramAPIClientTests {
 
         override func startLoading() {
             Self.capturedRequest = request
-            // httpBodyStream 才是 URLSession 實際塞資料的地方（httpBody 在透過
-            // URLSession 送出的請求物件上常常是 nil），要從 stream 讀出來才拿得到真正送出的 body
+            // 平台行為不一樣：在 Darwin 上，URLSession 實際塞資料的地方是 httpBodyStream
+            // （httpBody 在送出的請求物件上常常是 nil）；但在 Linux 的 swift-corelibs-foundation
+            // 上剛好相反，httpBodyStream 是 nil、body 直接留在 httpBody 裡——這是這次為了
+            // 驗證需求書「需能在 macOS 與 Linux 上執行」才用 Docker 實際跑過才發現的落差，
+            // 之前只在 macOS 測過，兩邊都要顧到。
             if let stream = request.httpBodyStream {
                 stream.open()
                 var data = Data()
@@ -34,6 +40,8 @@ struct URLSessionTelegramAPIClientTests {
                 }
                 stream.close()
                 Self.capturedBody = data
+            } else if let body = request.httpBody {
+                Self.capturedBody = body
             }
 
             guard let handler = Self.handler else {
@@ -62,7 +70,7 @@ struct URLSessionTelegramAPIClientTests {
 
     @Test("sendMessage without buttons: succeeds and the request body has no reply_markup key (inside)")
     func sendMessagePlainTextSucceeds() async throws {
-        MockURLProtocol.handler = { _ in
+        MockURLProtocol.handler = { (_: URLRequest) in
             (200, #"{"ok":true,"result":{"message_id":1,"chat":{"id":42},"text":"hi"}}"#.data(using: .utf8)!)
         }
         let client = makeClient()
@@ -78,7 +86,7 @@ struct URLSessionTelegramAPIClientTests {
 
     @Test("sendMessage with buttons: request body carries reply_markup.inline_keyboard (inside)")
     func sendMessageWithButtonsEncodesKeyboard() async throws {
-        MockURLProtocol.handler = { _ in
+        MockURLProtocol.handler = { (_: URLRequest) in
             (200, #"{"ok":true,"result":{"message_id":1,"chat":{"id":42},"text":"pick"}}"#.data(using: .utf8)!)
         }
         let client = makeClient()
@@ -99,7 +107,7 @@ struct URLSessionTelegramAPIClientTests {
 
     @Test("sendMessage where Telegram responds ok=false: throws .apiError, not a silent success (outside)")
     func sendMessageAPIErrorThrows() async throws {
-        MockURLProtocol.handler = { _ in
+        MockURLProtocol.handler = { (_: URLRequest) in
             (200, #"{"ok":false,"description":"chat not found"}"#.data(using: .utf8)!)
         }
         let client = makeClient()
@@ -111,7 +119,7 @@ struct URLSessionTelegramAPIClientTests {
 
     @Test("sendMessage where the HTTP layer itself fails (500): throws .httpError (boundary: transport failure)")
     func sendMessageHTTPErrorThrows() async throws {
-        MockURLProtocol.handler = { _ in
+        MockURLProtocol.handler = { (_: URLRequest) in
             (500, "internal server error".data(using: .utf8)!)
         }
         let client = makeClient()
@@ -123,7 +131,7 @@ struct URLSessionTelegramAPIClientTests {
 
     @Test("getUpdates: query carries offset/timeout, and the response is correctly mapped to [Update]")
     func getUpdatesParsesResponse() async throws {
-        MockURLProtocol.handler = { request in
+        MockURLProtocol.handler = { (request: URLRequest) in
             let url = request.url!.absoluteString
             #expect(url.contains("offset=7"))
             #expect(url.contains("timeout=25"))
@@ -146,7 +154,7 @@ struct URLSessionTelegramAPIClientTests {
 
     @Test("getUpdates with no offset: the offset query parameter is omitted entirely (boundary: first poll)")
     func getUpdatesWithoutOffsetOmitsParam() async throws {
-        MockURLProtocol.handler = { request in
+        MockURLProtocol.handler = { (request: URLRequest) in
             let url = request.url!.absoluteString
             #expect(!url.contains("offset="))
             return (200, #"{"ok":true,"result":[]}"#.data(using: .utf8)!)
@@ -165,7 +173,7 @@ struct URLSessionTelegramAPIClientTests {
         // allowed_updates，往後所有按鈕點擊都會被 Telegram 靜靜過濾掉、完全不會報錯，
         // 看起來就像「按了沒反應」。這裡守住：不管呼叫端有沒有想過這件事，我們都要主動
         // 明確要求 callback_query，不依賴伺服器端可能已經被汙染的殘留設定。
-        MockURLProtocol.handler = { request in
+        MockURLProtocol.handler = { (request: URLRequest) in
             let url = request.url!.absoluteString
             #expect(url.contains("allowed_updates="))
             #expect(url.contains("callback_query") || url.contains("callback_query".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""))
@@ -178,7 +186,7 @@ struct URLSessionTelegramAPIClientTests {
 
     @Test("setMyCommands: request body maps (name, description) tuples to command/description keys")
     func setMyCommandsEncodesCommandList() async throws {
-        MockURLProtocol.handler = { _ in (200, #"{"ok":true,"result":true}"#.data(using: .utf8)!) }
+        MockURLProtocol.handler = { (_: URLRequest) in (200, #"{"ok":true,"result":true}"#.data(using: .utf8)!) }
         let client = makeClient()
 
         try await client.setMyCommands([("cancel", "取消目前流程")])
@@ -192,7 +200,7 @@ struct URLSessionTelegramAPIClientTests {
 
     @Test("answerCallbackQuery: request body carries callback_query_id (inside)")
     func answerCallbackQuerySendsID() async throws {
-        MockURLProtocol.handler = { _ in (200, #"{"ok":true,"result":true}"#.data(using: .utf8)!) }
+        MockURLProtocol.handler = { (_: URLRequest) in (200, #"{"ok":true,"result":true}"#.data(using: .utf8)!) }
         let client = makeClient()
 
         try await client.answerCallbackQuery(callbackQueryID: "cb-42")
@@ -205,7 +213,7 @@ struct URLSessionTelegramAPIClientTests {
 
     @Test("answerCallbackQuery with a toast text: request body carries both fields (boundary: optional text)")
     func answerCallbackQueryWithTextSendsBoth() async throws {
-        MockURLProtocol.handler = { _ in (200, #"{"ok":true,"result":true}"#.data(using: .utf8)!) }
+        MockURLProtocol.handler = { (_: URLRequest) in (200, #"{"ok":true,"result":true}"#.data(using: .utf8)!) }
         let client = makeClient()
 
         try await client.answerCallbackQuery(callbackQueryID: "cb-42", text: "已收到")
@@ -220,7 +228,7 @@ struct URLSessionTelegramAPIClientTests {
     func editMessageReplyMarkupOmitsReplyMarkup() async throws {
         // 故意不帶 reply_markup 欄位：這是讓 Telegram 把整個 inline keyboard 拿掉的方式
         // （用來實現「舊按鈕點過就不能再點」，見 ConversationEngine.dispatch）。
-        MockURLProtocol.handler = { _ in
+        MockURLProtocol.handler = { (_: URLRequest) in
             (200, #"{"ok":true,"result":{"message_id":999,"chat":{"id":42},"text":"pick"}}"#.data(using: .utf8)!)
         }
         let client = makeClient()
@@ -236,7 +244,7 @@ struct URLSessionTelegramAPIClientTests {
 
     @Test("editMessageText: request body carries chat_id/message_id/text (inside)")
     func editMessageTextSendsFields() async throws {
-        MockURLProtocol.handler = { _ in
+        MockURLProtocol.handler = { (_: URLRequest) in
             (200, #"{"ok":true,"result":{"message_id":999,"chat":{"id":42},"text":"新文字"}}"#.data(using: .utf8)!)
         }
         let client = makeClient()

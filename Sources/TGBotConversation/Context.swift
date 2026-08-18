@@ -38,6 +38,13 @@ public final class Context<State: ConversationState, Session: Codable & Sendable
         )
     }
 
+    /// 查詢背景任務目前的狀態（對應 US-3：長任務執行期間，讓使用者能查詢「目前在處理什麼、
+    /// 進度如何」）。任務不存在（例如 id 打錯、或已經完成很久被排程器清掉）回傳 nil，
+    /// 由開發者決定要怎麼回覆使用者，框架不強加特定的「找不到」訊息格式。
+    public func backgroundJobStatus(id: String) async -> JobStatus? {
+        await scheduler.status(chatID: chatID, taskID: id)
+    }
+
     /// 啟動背景任務。taskID 讓開發者在多個背景任務並存時能辨識是哪一個完成了（對應 US-6）；
     /// onComplete 回傳值可選是否要順便觸發 transition，回傳 nil 代表只做通知，不改變狀態。
     /// 見架構設計文件 6.1／7／7.1 節：通知一定送達，觸發 transition 則要求原本的 scene 仍存在。

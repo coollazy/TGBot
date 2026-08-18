@@ -88,10 +88,11 @@ public final class TGBot: @unchecked Sendable {
         registry.setUnhandledHandler(handler)
     }
 
-    /// Scene handler 拋出未接住的錯誤時，記 log + 自動 rollback 之外，額外呼叫這個 hook。
-    /// 見架構設計文件 6.5 節。TODO：與 ConversationEngine 的錯誤處理路徑接上，下一階段實作。
+    /// Scene handler 拋出未接住的錯誤時，記 log 之外，額外呼叫這個 hook。見架構設計文件 6.5 節。
+    /// 跟 onUnhandled(...) 走同一套「同步寫進鎖保護的 EngineRegistry」模式，保證在 run()
+    /// 開始輪詢前一定已經註冊完成。
     public func onError(_ handler: @escaping @Sendable (GlobalContext, Error) async throws -> Void) {
-        // TODO
+        registry.setErrorHandler(handler)
     }
 
     /// 啟動：依 configuration 決定用哪種 UpdateSource，並自動呼叫 setMyCommands 同步指令選單。
@@ -100,10 +101,16 @@ public final class TGBot: @unchecked Sendable {
         if !commandDescriptions.isEmpty {
             try await apiClient.setMyCommands(commandDescriptions)
         }
-        try await updateSource.start { [engine, accessPolicy, logger] update in
+        try await updateSource.start { [engine, accessPolicy, logger, apiClient, configuration] update in
             guard accessPolicy.isAllowed(userID: update.userID, chatID: update.chatID) else {
                 logger.debug("rejected unauthorized update from chat \(update.chatID)")
-                // TODO: 回覆 configuration.unauthorizedMessage，見架構設計文件第 5 節
+                // US-4：白名單擋下的請求要收到「明確拒絕回覆」，不是靜默忽略——這是需求書
+                // 明文寫的行為，之前這裡只記了 log、從沒真的回過訊息，是文件對照才發現的落差。
+                // 用 try? 是因為就算這次回覆失敗（例如使用者封鎖了 bot），也不該讓輪詢迴圈掛掉。
+                try? await apiClient.sendMessage(
+                    chatID: update.chatID,
+                    text: configuration.unauthorizedMessage(update.userID, update.chatID)
+                )
                 return
             }
             await engine.dispatch(update: update)

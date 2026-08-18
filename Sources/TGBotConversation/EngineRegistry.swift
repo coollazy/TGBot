@@ -15,6 +15,7 @@ public final class EngineRegistry: @unchecked Sendable {
     private var sceneTriggers: [String: AnyScene] = [:]
     private var commandHandlers: [String: @Sendable (GlobalContext) async throws -> Void] = [:]
     private var unhandledHandler: (@Sendable (GlobalContext) async throws -> Void)?
+    private var errorHandler: (@Sendable (GlobalContext, Error) async throws -> Void)?
 
     public init() {}
 
@@ -41,6 +42,12 @@ public final class EngineRegistry: @unchecked Sendable {
         unhandledHandler = handler
     }
 
+    public func setErrorHandler(_ handler: @escaping @Sendable (GlobalContext, Error) async throws -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        errorHandler = handler
+    }
+
     func scene(named name: String) -> AnyScene? {
         lock.lock()
         defer { lock.unlock() }
@@ -63,5 +70,11 @@ public final class EngineRegistry: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return unhandledHandler
+    }
+
+    func errorHandlerIfAny() -> (@Sendable (GlobalContext, Error) async throws -> Void)? {
+        lock.lock()
+        defer { lock.unlock() }
+        return errorHandler
     }
 }

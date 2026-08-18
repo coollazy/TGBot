@@ -126,4 +126,45 @@ struct ContextBackgroundJobTests {
 
         #expect(apiClient.sentMessages[0].text == "job t2 failed as expected")
     }
+
+    @Test("ctx.backgroundJobStatus(id:) exposes the scheduler's status to the developer (inside)")
+    func backgroundJobStatusExposesSchedulerStatus() async throws {
+        // BackgroundTaskScheduling.status(chatID:taskID:) 一直都存在，但 Context／
+        // GlobalContext 完全沒有方法可以呼叫它——開發者寫不出「/status 查進度」這種指令
+        // （對照需求書 US-3 才發現的落差）。這裡驗證新加的 ctx.backgroundJobStatus(id:)
+        // 真的把 scheduler 回傳的東西轉交給開發者。
+        struct StubScheduler: BackgroundTaskScheduling {
+            func start(
+                chatID: Int64, taskID: String,
+                work: @escaping @Sendable (JobProgress) async throws -> Void,
+                onComplete: @escaping @Sendable (JobResult) async throws -> Void
+            ) async {}
+            func status(chatID: Int64, taskID: String) async -> JobStatus? {
+                guard taskID == "known-task" else { return nil }
+                return JobStatus(taskID: taskID, lastMessage: "70% 完成", isFinished: false)
+            }
+        }
+        let apiClient = RecordingAPIClient()
+        let registry = EngineRegistry()
+        let engine = ConversationEngine(
+            stateStore: InMemoryStateStore(),
+            apiClient: apiClient,
+            scheduler: StubScheduler(),
+            logger: Logger(label: "test"),
+            registry: registry
+        )
+
+        let scene = Scene<State, EmptySession>(name: "status", initial: .main)
+        scene.on(.main) { ctx in
+            let known = await ctx.backgroundJobStatus(id: "known-task")
+            let unknown = await ctx.backgroundJobStatus(id: "no-such-task")
+            try await ctx.reply("known=\(known?.lastMessage ?? "nil") unknown=\(unknown == nil)")
+            return .stay
+        }
+        registry.registerScene(scene, commandTrigger: "status")
+
+        await engine.dispatch(update: Update(updateID: 1, chatID: 1, text: "/status", commandName: "status"))
+
+        #expect(apiClient.sentMessages.last?.text == "known=70% 完成 unknown=true")
+    }
 }

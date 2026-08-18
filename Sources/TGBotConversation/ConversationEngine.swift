@@ -154,7 +154,13 @@ public actor ConversationEngine: ConversationEngineHandle {
             }
         } catch {
             logger.error("scene resume failed for chat \(update.chatID): \(error)")
-            // TODO: 6.5 節完整的「記 log + 自動 rollback + 可選 onError hook」，這裡先只記 log
+            // TODO: 6.5 節「自動 rollback」還沒做（要等 Phase 3 的狀態歷史棧才有東西可以退回）。
+            // onError hook 已經接上：開發者有註冊的話，這裡額外通知，讓他們能自己決定要不要
+            // 回訊息給使用者、要不要額外上報；用 try? 是因為 hook 本身如果又拋錯，不該讓
+            // dispatch 整個掛掉——原本的錯誤已經記過 log 了。
+            if let errorHandler = registry.errorHandlerIfAny() {
+                try? await errorHandler(makeGlobalContext(text: update.text, callbackData: update.callbackData), error)
+            }
         }
     }
 }
