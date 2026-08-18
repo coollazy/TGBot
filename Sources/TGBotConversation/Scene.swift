@@ -12,11 +12,17 @@ public final class Scene<State: ConversationState, Session: Codable & Sendable>:
     // 內部儲存每個 state 對應的處理函式；class 讓 on(...) 不需要 mutating 即可寫入
     package let handlers: HandlerStorage<State, Session>
 
+    // 每個 state 對應「從中斷它的子流程恢復時」要做的事（通常是回一句話重新交代現在
+    // 在等什麼）。刻意獨立於 handlers 之外：resume 這件事不是「使用者傳了什麼進來」，
+    // 沒有 Update 可以處理，語意上跟 on(...) 是兩種不同的註冊。
+    package let resumeHandlers: ResumeHandlerStorage<State, Session>
+
     public init(name: String, initial: State, initialSession: Session) {
         self.name = name
         self.initial = initial
         self.initialSession = initialSession
         self.handlers = HandlerStorage()
+        self.resumeHandlers = ResumeHandlerStorage()
     }
 
     /// 每個 state 對應一個處理函式，ctx.session 型別即為開發者指定的 Session
@@ -25,6 +31,18 @@ public final class Scene<State: ConversationState, Session: Codable & Sendable>:
         handler: @escaping @Sendable (Context<State, Session>) async throws -> Transition<State>
     ) {
         handlers.set(state, handler)
+    }
+
+    /// 選配：這個 state 被 Transition.interrupt 中斷、子流程結束後恢復時，要跟使用者說什麼。
+    /// 見架構設計文件 US-1——中斷/恢復本身框架會自動處理，但「恢復時要講什麼話」只有
+    /// 開發者自己知道（使用者不知道什麼是「scene」、什麼是「子流程」，框架硬塞一句通用訊息
+    /// 對使用者來說毫無意義），所以設計成選配 hook，不註冊就維持原本的靜默行為
+    /// （下一句使用者輸入直接照原本的 on(...) handler 處理，不會多這一句話）。
+    public func onResume(
+        _ state: State,
+        handler: @escaping @Sendable (Context<State, Session>) async throws -> Void
+    ) {
+        resumeHandlers.set(state, handler)
     }
 }
 
@@ -48,6 +66,30 @@ package final class HandlerStorage<State: ConversationState, Session: Codable & 
     }
 
     package func handler(for state: State) -> (@Sendable (Context<State, Session>) async throws -> Transition<State>)? {
+        lock.lock()
+        defer { lock.unlock() }
+        return handlers[state]
+    }
+}
+
+/// 跟 HandlerStorage 同一套鎖保護容器設計，差別只在 handler 的型別（沒有 Transition
+/// 回傳值——resume 通知本身不該導致狀態再往下走，見 Scene.onResume）。
+package final class ResumeHandlerStorage<State: ConversationState, Session: Codable & Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var handlers: [State: @Sendable (Context<State, Session>) async throws -> Void] = [:]
+
+    package init() {}
+
+    package func set(
+        _ state: State,
+        _ handler: @escaping @Sendable (Context<State, Session>) async throws -> Void
+    ) {
+        lock.lock()
+        defer { lock.unlock() }
+        handlers[state] = handler
+    }
+
+    package func handler(for state: State) -> (@Sendable (Context<State, Session>) async throws -> Void)? {
         lock.lock()
         defer { lock.unlock() }
         return handlers[state]

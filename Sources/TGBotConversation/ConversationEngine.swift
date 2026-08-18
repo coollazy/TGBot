@@ -163,37 +163,85 @@ public actor ConversationEngine: ConversationEngineHandle {
                 sceneToRun = nil
             }
 
-            guard let scene = sceneToRun else {
+            guard var scene = sceneToRun else {
                 logger.debug("dispatch: chat=\(update.chatID) no scene matched, unhandledHandler=\(registry.unhandledHandlerIfAny() != nil)")
                 if let unhandledHandler = registry.unhandledHandlerIfAny() {
                     try await unhandledHandler(makeGlobalContext(text: update.text, callbackData: update.callbackData))
                 }
                 return
             }
-            logger.debug("dispatch: chat=\(update.chatID) running scene=\(scene.name)")
 
-            let result = try await scene.resume(
-                update: update,
-                savedState: record.currentStateData,
-                savedSession: record.sessionData,
-                stateHistory: record.stateHistory,
-                dependencies: dependencies
-            )
+            // 用迴圈而非單次呼叫：.interrupted 時要「立刻」把同一筆 update 餵給剛切換進去
+            // 的新 scene 執行它自己的 initial state handler，跟頂層指令觸發 scene 進入時的
+            // 行為一致（進入當下就看得到第一句話，不用使用者多送一句什麼都沒意義的訊息
+            // 才會有反應）。.ended 時則不會這樣接著跑——被恢復的流程要等使用者真的送下一句
+            // 新的話才處理，剛剛結束子流程那句話不該被誤當成也是說給被恢復的流程聽的。
+            while true {
+                logger.debug("dispatch: chat=\(update.chatID) running scene=\(scene.name)")
 
-            logger.debug("dispatch: chat=\(update.chatID) scene=\(scene.name) transition=\(result.transition)")
+                let result = try await scene.resume(
+                    update: update,
+                    savedState: record.currentStateData,
+                    savedSession: record.sessionData,
+                    stateHistory: record.stateHistory,
+                    dependencies: dependencies
+                )
 
-            switch result.transition {
-            case .moved, .stayed, .rolledBack:
-                record.activeScene = scene.name
-                record.currentStateData = result.newState
-                record.sessionData = result.newSession
-                record.stateHistory = result.newHistory
-                await stateStore.save(chatID: update.chatID, record)
-            case .ended:
-                record.reset()
-                await stateStore.save(chatID: update.chatID, record)
-            case .interrupted:
-                fatalError("dispatch: interrupt 尚未實作")
+                logger.debug("dispatch: chat=\(update.chatID) scene=\(scene.name) transition=\(result.transition)")
+
+                switch result.transition {
+                case .moved, .stayed, .rolledBack:
+                    record.activeScene = scene.name
+                    record.currentStateData = result.newState
+                    record.sessionData = result.newSession
+                    record.stateHistory = result.newHistory
+                    await stateStore.save(chatID: update.chatID, record)
+                    return
+                case .ended:
+                    if let suspended = record.sceneStack.popLast() {
+                        // 被中斷的流程還在等——原地恢復它暫停當下的 state/session，讓下一輪
+                        // 使用者輸入直接接著原本被中斷的地方繼續跑。
+                        // 已知限制（最小版本）：暫停時的 stateHistory 沒有一起存，恢復後這個
+                        // scene 的 rollback 歷史是空的；sessionData 也不會清空以外的欄位重置，
+                        // 只還原 activeScene／currentStateData／sessionData 這三項。
+                        record.activeScene = suspended.scene.name
+                        record.currentStateData = suspended.savedState
+                        record.sessionData = suspended.savedSession
+                        record.stateHistory = []
+                        await stateStore.save(chatID: update.chatID, record)
+
+                        // 選配：這個 state 有沒有註冊 onResume 完全交給開發者決定——使用者
+                        // 不知道什麼是「scene」、什麼是「子流程」，框架自己硬塞一句通用訊息
+                        // 對使用者來說毫無意義，所以框架只保證「恢復這件事發生時會呼叫這個
+                        // hook」，實際要不要講話、講什麼話，開發者自己決定。沒註冊就靜默，
+                        // 是實機測試發現「岔出去再回來，使用者完全不知道發生什麼事」才補上的。
+                        // 用 try? 是因為這個 hook 本身丟錯，不該讓已經完成的恢復動作被回滾。
+                        try? await suspended.scene.notifyResumed(
+                            chatID: update.chatID,
+                            userID: update.userID,
+                            savedState: suspended.savedState,
+                            savedSession: suspended.savedSession,
+                            dependencies: dependencies
+                        )
+                    } else {
+                        record.reset()
+                        await stateStore.save(chatID: update.chatID, record)
+                    }
+                    return
+                case .interrupted:
+                    guard let suspended = result.suspended, let interruptingScene = result.interruptingScene else {
+                        logger.error("dispatch: .interrupted transition missing suspended/interruptingScene payload for chat \(update.chatID)")
+                        return
+                    }
+                    record.sceneStack.append(suspended)
+                    record.activeScene = interruptingScene.name
+                    record.currentStateData = nil // 新流程從自己的 initial 開始
+                    record.sessionData = Data()
+                    record.stateHistory = []
+                    scene = interruptingScene
+                    // 不 return、不存檔——繼續迴圈，立刻用同一筆 update 跑新 scene；
+                    // 存檔會在新 scene 這一輪真正處理完（.moved／.stayed／.ended／...）時才做。
+                }
             }
         } catch {
             logger.error("scene resume failed for chat \(update.chatID): \(error)")

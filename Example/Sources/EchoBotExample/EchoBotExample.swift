@@ -6,7 +6,9 @@ import TGBot
 /// 用 inline 按鈕收集選項（callback_query 那條路徑）、多步驟 session 累積資料、
 /// 流程中途插入一個長任務（確認後「產生總結」模擬成要跑 5 秒的背景任務，這段期間
 /// bot 仍可正常回應其他訊息，任務完成後才送出總結、結束流程）、在被問年齡時輸入
-/// 「上一步」可以體驗 Transition.rollback 真的退回上一步（重新輸入名字），不是原地不動。
+/// 「上一步」可以體驗 Transition.rollback 真的退回上一步（重新輸入名字），不是原地不動、
+/// 輸入「小提示」可以體驗 Transition.interrupt：暫停填資料的流程、岔去跑一個完全獨立的
+/// 小提示子流程，子流程結束後自動接回原本填到一半、沒填完的地方繼續（不是重新開始）。
 ///
 /// 這是獨立於 TGBot library 本身的 SwiftPM 專案（見 ../Package.swift 用 local path
 /// 依賴），只 `import TGBot` 這一個 module——刻意模擬真正外部開發者的使用情境。
@@ -47,7 +49,15 @@ struct EchoBotExample {
         }
 
         let bot = TGBot(configuration: configuration)
-        let profile = makeProfileScene()
+
+        // 小提示子流程：填 /profile 填到一半可以用「小提示」中斷進來，也能直接用
+        // /tips 單獨啟動——中斷（Transition.interrupt）需要目標 scene 能被 registry
+        // 查得到，所以這裡也要註冊，即使實務上通常是被中斷帶進來，不是使用者自己打指令進來的。
+        // 建一次、兩邊共用同一個實例，不要各自各建一個同名但不同物件的 scene。
+        let tips = makeTipsScene()
+        bot.register(tips, trigger: .command("tips"), description: "查看這個範例的小提示")
+
+        let profile = makeProfileScene(tipsScene: tips)
         bot.register(profile, trigger: .command("profile"), description: "開始填寫個人資料")
 
         // 全域指令：取消目前流程（US-5），description 會自動同步進 Telegram 的指令選單。
@@ -64,7 +74,7 @@ struct EchoBotExample {
     /// 再問下一個問題、轉移到下一個 state——例如 .askAge 的 handler 收到的
     /// ctx.text 其實是使用者對「你叫什麼名字？」的回答（名字），不是年齡；
     /// 進到 .askAge 這個 state 本身才是要問年齡。
-    static func makeProfileScene() -> Scene<ProfileState, ProfileData> {
+    static func makeProfileScene(tipsScene: Scene<TipsState, EmptySession>) -> Scene<ProfileState, ProfileData> {
         let scene = Scene<ProfileState, ProfileData>(name: "profile", initial: .askName, initialSession: ProfileData())
 
         scene.on(.askName) { ctx in
@@ -76,7 +86,7 @@ struct EchoBotExample {
         scene.on(.askAge) { ctx in
             // 上一步問的是名字，這裡收到的就是名字
             ctx.session.name = ctx.text
-            try await ctx.reply("\(ctx.session.name ?? "你")幾歲呢？請輸入數字（也可以輸入「上一步」回去重新輸入名字）。")
+            try await ctx.reply("\(ctx.session.name ?? "你")幾歲呢？請輸入數字（也可以輸入「上一步」回去重新輸入名字、「小提示」查看提示）。")
             return .transition(to: .askGender)
         }
 
@@ -89,9 +99,16 @@ struct EchoBotExample {
                 return .rollback
             }
 
+            // 示範 US-1：Transition.interrupt 讓填資料的流程可以暫停自己、岔去跑一個
+            // 完全獨立的子流程（小提示），跟填資料本身無關；子流程結束後會自動接回這裡
+            // 繼續問年齡，不是重新開始整個 /profile。之前這裡直接 fatalError，完全沒實作。
+            if ctx.text == "小提示" {
+                return .interrupt(with: AnyScene(tipsScene))
+            }
+
             // 上一步問的是年齡；輸入不合法就留在原地重試（對應 US-2：錯誤發生時退回重試）
             guard let text = ctx.text, let age = Int(text), age >= 0, age <= 150 else {
-                try await ctx.reply("這個年齡看起來怪怪的，請輸入一個 0～150 之間的數字，或輸入「上一步」重新輸入名字。")
+                try await ctx.reply("這個年齡看起來怪怪的，請輸入一個 0～150 之間的數字，或輸入「上一步」重新輸入名字、「小提示」查看提示。")
                 return .stay
             }
             ctx.session.age = age
@@ -174,6 +191,57 @@ struct EchoBotExample {
             // 回覆，而不是誤導成別的意思。
             try await ctx.reply("總結還在產生中，完成後會主動通知你，請稍候。")
             return .stay
+        }
+
+        // 示範 US-1 的 onResume hook：從「小提示」子流程回來時，主動交代現在在等什麼，
+        // 用開發者自己知道的措辭（使用者的名字、正在問年齡這件事），不是框架塞一句
+        // 使用者看不懂「已回到某個 scene」的通用訊息——這是實機測試才發現的落差：
+        // 沒有這個 hook 的時候，岔出去再回來，下一句話只會撞上驗證失敗的訊息
+        // （「這個年齡看起來怪怪的」），聽起來像使用者答錯了，但其實只是被晾在那裡而已。
+        scene.onResume(.askGender) { ctx in
+            try await ctx.reply("好，我們繼續填資料：\(ctx.session.name ?? "你")幾歲呢？請輸入數字。")
+        }
+
+        return scene
+    }
+
+    enum TipsState: ConversationState {
+        case menu
+        case detail
+    }
+
+    /// 完全獨立於 /profile 的一個小流程：可以自己用 /tips 直接啟動，也可以被
+    /// /profile 中斷帶進來（見 .askGender 裡的「小提示」判斷）。.menu 是入口，
+    /// 忽略觸發用的文字（可能是「小提示」這句話，也可能是 /tips 指令本身），
+    /// 直接顯示選單；.detail 處理按鈕點擊，回答完就 .end——如果是被中斷帶進來的，
+    /// .end 之後 dispatch 會自動把原本被中斷的 /profile 接回去繼續問年齡。
+    static func makeTipsScene() -> Scene<TipsState, EmptySession> {
+        let scene = Scene<TipsState, EmptySession>(name: "tips", initial: .menu)
+
+        scene.on(.menu) { ctx in
+            try await ctx.replyWithMenu(
+                "小提示：想看哪一個？",
+                buttons: [[
+                    InlineButton(text: "為什麼要收集這些資料？", callbackData: "why"),
+                    InlineButton(text: "資料會怎麼被使用？", callbackData: "usage"),
+                ]]
+            )
+            return .transition(to: .detail)
+        }
+
+        scene.on(.detail) { ctx in
+            let tip: String
+            switch ctx.callbackData {
+            case "why":
+                tip = "這是示範 Transition.interrupt：填資料填到一半也能先岔開處理別的事，" +
+                    "處理完會自動接回原本沒填完的地方繼續，不用重新開始。"
+            case "usage":
+                tip = "這只是範例，不會真的把資料存到任何地方——bot 一重啟，資料就沒了。"
+            default:
+                tip = "請點選上面的按鈕。"
+            }
+            try await ctx.reply(tip)
+            return .end
         }
 
         return scene
