@@ -15,6 +15,7 @@ public final class Context<State: ConversationState, Session: Codable & Sendable
         userID: Int64?,
         text: String?,
         callbackData: String?,
+        messageID: Int64? = nil,
         session: Session,
         sceneName: String,
         apiClient: TelegramAPIClient,
@@ -30,6 +31,7 @@ public final class Context<State: ConversationState, Session: Codable & Sendable
             userID: userID,
             text: text,
             callbackData: callbackData,
+            messageID: messageID,
             apiClient: apiClient,
             engine: engine,
             logger: logger

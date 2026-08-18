@@ -103,6 +103,10 @@ struct EchoBotExample {
             ctx.session.gender = gender
 
             let genderLabel = gender == "male" ? "男" : "女"
+            // 框架已經自動把「男／女」按鈕拿掉了，這裡額外把原本那則消息的文字也換成
+            // 顯示選擇結果，體驗上比只是按鈕消失、什麼都沒交代要好
+            try await ctx.updateOriginalMessage("了解，請選擇性別：已選擇 \(genderLabel) ✅")
+
             let name = ctx.session.name ?? "（未填寫）"
             let age = ctx.session.age.map(String.init) ?? "（未填寫）"
 

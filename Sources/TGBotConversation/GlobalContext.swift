@@ -9,6 +9,10 @@ public class GlobalContext: @unchecked Sendable {
     public let text: String?
     public let callbackData: String?
 
+    /// 這次 update 對應的訊息 ID（callback_query 是按鈕所在的那則訊息）。
+    /// updateOriginalMessage(_:) 靠它知道要編輯哪一則訊息。
+    let messageID: Int64?
+
     let apiClient: TelegramAPIClient
     let engine: ConversationEngineHandle
     let logger: Logger
@@ -18,6 +22,7 @@ public class GlobalContext: @unchecked Sendable {
         userID: Int64?,
         text: String?,
         callbackData: String?,
+        messageID: Int64? = nil,
         apiClient: TelegramAPIClient,
         engine: ConversationEngineHandle,
         logger: Logger
@@ -26,6 +31,7 @@ public class GlobalContext: @unchecked Sendable {
         self.userID = userID
         self.text = text
         self.callbackData = callbackData
+        self.messageID = messageID
         self.apiClient = apiClient
         self.engine = engine
         self.logger = logger
@@ -40,6 +46,19 @@ public class GlobalContext: @unchecked Sendable {
             row.map { TGInlineKeyboardButton(text: $0.text, callbackData: $0.callbackData) }
         }
         try await apiClient.sendMessage(chatID: chatID, text: text, inlineKeyboard: rows)
+    }
+
+    /// 把「使用者剛剛點的那個按鈕所在的訊息」文字換成 text（例如把「請選擇性別：」換成
+    /// 「請選擇性別：已選擇 男 ✅」）。框架已經自動把按鈕拿掉了（見 ConversationEngine.dispatch），
+    /// 這個方法純粹是選配的加值——要不要順便讓使用者看到自己選了什麼、要用什麼字，
+    /// 交給開發者自己決定，框架不會自動幫忙組字（callback_data 本身通常是給程式看的內部值，
+    /// 例如 "male"，不是給使用者看的中文標籤，框架沒辦法自動生出正確的顯示文字）。
+    ///
+    /// 只有透過按鈕點擊（callback_query）觸發的 handler 才拿得到 messageID，一般文字訊息
+    /// 呼叫這個方法會被忽略（沒有意義：不是「按鈕所在的訊息」）。
+    public func updateOriginalMessage(_ text: String) async throws {
+        guard let messageID else { return }
+        try await apiClient.editMessageText(chatID: chatID, messageID: messageID, text: text)
     }
 
     /// US-5：清空目前 chat 的 scene/state/session/歷史棧/scene 棧，回到 idle。

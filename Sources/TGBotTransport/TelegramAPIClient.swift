@@ -34,6 +34,10 @@ public protocol TelegramAPIClient: Sendable {
     /// 的按鈕不能再被點——不然使用者回頭誤點已經處理過的按鈕，會被目前的對話狀態誤判成
     /// 別的意思，跳出文不對題的回覆。見 ConversationEngine.dispatch。
     func editMessageReplyMarkup(chatID: Int64, messageID: Int64) async throws
+
+    /// 把指定訊息的文字換成 text。用在開發者想讓「使用者剛剛點的按鈕所在的訊息」順便
+    /// 顯示選擇結果的時候，見 GlobalContext.updateOriginalMessage(_:)。
+    func editMessageText(chatID: Int64, messageID: Int64, text: String) async throws
 }
 
 extension TelegramAPIClient {
@@ -170,6 +174,28 @@ public final class URLSessionTelegramAPIClient: TelegramAPIClient, @unchecked Se
         _ = try await post(
             path: "editMessageReplyMarkup",
             body: Body(chatID: chatID, messageID: messageID),
+            responseType: TGMessage.self
+        )
+    }
+
+    public func editMessageText(chatID: Int64, messageID: Int64, text: String) async throws {
+        struct Body: Encodable {
+            let chatID: Int64
+            let messageID: Int64
+            let text: String
+            enum CodingKeys: String, CodingKey {
+                case chatID = "chat_id"
+                case messageID = "message_id"
+                case text
+            }
+        }
+        // 故意不帶 reply_markup：editMessageText 沒帶這個欄位時，Telegram 不會動原本的
+        // inline keyboard——但在框架的呼叫順序裡，這個方法一定是在 dispatch 已經先呼叫過
+        // editMessageReplyMarkup（拿掉按鈕）之後才可能被開發者呼叫，所以此時反正已經沒有
+        // keyboard 了，不用特別再處理一次。
+        _ = try await post(
+            path: "editMessageText",
+            body: Body(chatID: chatID, messageID: messageID, text: text),
             responseType: TGMessage.self
         )
     }

@@ -233,4 +233,20 @@ struct URLSessionTelegramAPIClientTests {
         #expect(json["message_id"] as? Int64 == 999)
         #expect(json["reply_markup"] == nil)
     }
+
+    @Test("editMessageText: request body carries chat_id/message_id/text (inside)")
+    func editMessageTextSendsFields() async throws {
+        MockURLProtocol.handler = { _ in
+            (200, #"{"ok":true,"result":{"message_id":999,"chat":{"id":42},"text":"新文字"}}"#.data(using: .utf8)!)
+        }
+        let client = makeClient()
+
+        try await client.editMessageText(chatID: 42, messageID: 999, text: "已選擇：男 ✅")
+
+        let body = try #require(MockURLProtocol.capturedBody)
+        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(json["chat_id"] as? Int64 == 42)
+        #expect(json["message_id"] as? Int64 == 999)
+        #expect(json["text"] as? String == "已選擇：男 ✅")
+    }
 }

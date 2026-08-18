@@ -76,6 +76,7 @@ public actor ConversationEngine: ConversationEngineHandle {
                 userID: update.userID,
                 text: text,
                 callbackData: callbackData,
+                messageID: update.messageID,
                 apiClient: apiClient,
                 engine: self,
                 logger: logger

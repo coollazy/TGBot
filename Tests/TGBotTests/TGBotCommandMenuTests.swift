@@ -27,6 +27,7 @@ struct TGBotCommandMenuTests {
         }
         func answerCallbackQuery(callbackQueryID: String, text: String?) async throws {}
         func editMessageReplyMarkup(chatID: Int64, messageID: Int64) async throws {}
+        func editMessageText(chatID: Int64, messageID: Int64, text: String) async throws {}
     }
 
     @Test("register(_:trigger:description:) syncs to setMyCommands just like onCommand(...) does (inside)")

@@ -15,6 +15,7 @@ struct CallbackQueryAcknowledgementTests {
         private(set) var sentMessages: [(chatID: Int64, text: String)] = []
         private(set) var acknowledgedCallbackQueryIDs: [String] = []
         private(set) var editedReplyMarkups: [(chatID: Int64, messageID: Int64)] = []
+        private(set) var editedTexts: [(chatID: Int64, messageID: Int64, text: String)] = []
 
         func sendMessage(chatID: Int64, text: String, inlineKeyboard: [[TGInlineKeyboardButton]]?) async throws {
             sentMessages.append((chatID, text))
@@ -26,6 +27,9 @@ struct CallbackQueryAcknowledgementTests {
         }
         func editMessageReplyMarkup(chatID: Int64, messageID: Int64) async throws {
             editedReplyMarkups.append((chatID, messageID))
+        }
+        func editMessageText(chatID: Int64, messageID: Int64, text: String) async throws {
+            editedTexts.append((chatID, messageID, text))
         }
     }
 
@@ -67,6 +71,50 @@ struct CallbackQueryAcknowledgementTests {
 
         #expect(apiClient.acknowledgedCallbackQueryIDs == ["cb-1"])
         #expect(apiClient.sentMessages[1].text == "got: go")
+    }
+
+    @Test("ctx.updateOriginalMessage edits the message the tapped button lived on (inside)")
+    func updateOriginalMessageEditsTheButtonMessage() async throws {
+        let apiClient = RecordingAPIClient()
+        let (engine, registry) = makeEngine(apiClient)
+
+        let scene = Scene<State, EmptySession>(name: "pick", initial: .only)
+        scene.on(.only) { ctx in
+            try await ctx.updateOriginalMessage("已選擇：男 ✅")
+            return .stay
+        }
+        registry.registerScene(scene, commandTrigger: "pick")
+
+        await engine.dispatch(update: Update(updateID: 1, chatID: 1, text: "/pick", commandName: "pick"))
+        await engine.dispatch(update: Update(
+            updateID: 2, chatID: 1, callbackData: "male", callbackQueryID: "cb-1", messageID: 42
+        ))
+
+        #expect(apiClient.editedTexts.count == 1)
+        #expect(apiClient.editedTexts[0].chatID == 1)
+        #expect(apiClient.editedTexts[0].messageID == 42)
+        #expect(apiClient.editedTexts[0].text == "已選擇：男 ✅")
+    }
+
+    @Test("ctx.updateOriginalMessage is a no-op when there's no messageID, e.g. from a plain text turn (boundary)")
+    func updateOriginalMessageNoOpWithoutMessageID() async throws {
+        let apiClient = RecordingAPIClient()
+        let (engine, registry) = makeEngine(apiClient)
+
+        let scene = Scene<State, EmptySession>(name: "echo", initial: .only)
+        scene.on(.only) { ctx in
+            // 沒有透過按鈕觸發，ctx 沒有 messageID 可用——呼叫這個方法不該炸掉，
+            // 應該直接安靜地什麼都不做
+            try await ctx.updateOriginalMessage("這句話不該被送出")
+            try await ctx.reply("ok")
+            return .stay
+        }
+        registry.registerScene(scene, commandTrigger: "echo")
+
+        await engine.dispatch(update: Update(updateID: 1, chatID: 1, text: "/echo", commandName: "echo"))
+
+        #expect(apiClient.editedTexts.isEmpty)
+        #expect(apiClient.sentMessages.last?.text == "ok")
     }
 
     @Test("a callback_query update also strips the inline keyboard off the original message (inside)")
@@ -126,6 +174,7 @@ struct CallbackQueryAcknowledgementTests {
                 throw AckError() // 模擬 Telegram 拒絕（例如 query 太舊）
             }
             func editMessageReplyMarkup(chatID: Int64, messageID: Int64) async throws {}
+            func editMessageText(chatID: Int64, messageID: Int64, text: String) async throws {}
         }
         let apiClient = FailingAckAPIClient()
         let (engine, registry) = makeEngine(apiClient)

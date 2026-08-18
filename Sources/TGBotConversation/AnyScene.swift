@@ -46,6 +46,7 @@ public struct AnyScene: Sendable {
                 userID: update.userID,
                 text: update.text,
                 callbackData: update.callbackData,
+                messageID: update.messageID,
                 session: session,
                 sceneName: scene.name,
                 apiClient: dependencies.apiClient,
