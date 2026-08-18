@@ -98,7 +98,18 @@ public final class URLSessionTelegramAPIClient: TelegramAPIClient, @unchecked Se
 
     public func getUpdates(offset: Int?, timeout: Int) async throws -> [Update] {
         var components = URLComponents(string: "\(baseURL)/getUpdates")!
-        var queryItems = [URLQueryItem(name: "timeout", value: String(timeout))]
+        // 明確指定 allowed_updates：Telegram 會把「上一次呼叫帶的 allowed_updates」記在
+        // bot token 上，之後所有呼叫（不管是誰打的）都會沿用那個過濾設定，直到有人再帶一次
+        // 不同的值為止。如果完全不帶這個參數（原本的寫法），一旦任何工具或舊測試曾經帶過
+        // 不含 callback_query 的 allowed_updates，就會讓按鈕永遠收不到 callback_query，
+        // 而且完全不會報錯、看起來像是「按了沒反應」——這是實機測試才挖出來的真實問題，
+        // 單元測試用的假 API client 從來不會踩到（因為根本不會真的呼叫 Telegram）。
+        // 固定帶上完整清單，讓 library 的行為不會被外部呼叫過的殘留設定汙染。
+        let allowedUpdatesJSON = #"["message","callback_query"]"#
+        var queryItems = [
+            URLQueryItem(name: "timeout", value: String(timeout)),
+            URLQueryItem(name: "allowed_updates", value: allowedUpdatesJSON),
+        ]
         if let offset {
             queryItems.append(URLQueryItem(name: "offset", value: String(offset)))
         }

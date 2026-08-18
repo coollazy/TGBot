@@ -157,6 +157,25 @@ struct URLSessionTelegramAPIClientTests {
         #expect(updates.isEmpty)
     }
 
+    @Test("getUpdates always explicitly requests callback_query in allowed_updates (inside)")
+    func getUpdatesAlwaysRequestsCallbackQuery() async throws {
+        // 實機測試發現的真實 bug：Telegram 會把「上一次呼叫帶的 allowed_updates」記在 bot
+        // token 上、之後所有呼叫沿用同一個過濾設定，直到有人再明確帶一次不同的值為止。
+        // 之前完全不帶這個參數，一旦有任何外部工具或舊測試曾經帶過不含 callback_query 的
+        // allowed_updates，往後所有按鈕點擊都會被 Telegram 靜靜過濾掉、完全不會報錯，
+        // 看起來就像「按了沒反應」。這裡守住：不管呼叫端有沒有想過這件事，我們都要主動
+        // 明確要求 callback_query，不依賴伺服器端可能已經被汙染的殘留設定。
+        MockURLProtocol.handler = { request in
+            let url = request.url!.absoluteString
+            #expect(url.contains("allowed_updates="))
+            #expect(url.contains("callback_query") || url.contains("callback_query".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""))
+            return (200, #"{"ok":true,"result":[]}"#.data(using: .utf8)!)
+        }
+        let client = makeClient()
+
+        _ = try await client.getUpdates(offset: nil, timeout: 25)
+    }
+
     @Test("setMyCommands: request body maps (name, description) tuples to command/description keys")
     func setMyCommandsEncodesCommandList() async throws {
         MockURLProtocol.handler = { _ in (200, #"{"ok":true,"result":true}"#.data(using: .utf8)!) }

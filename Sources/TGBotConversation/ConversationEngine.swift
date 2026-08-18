@@ -90,6 +90,8 @@ public actor ConversationEngine: ConversationEngineHandle {
             try? await apiClient.answerCallbackQuery(callbackQueryID: callbackQueryID)
         }
 
+        logger.debug("dispatch: chat=\(update.chatID) command=\(update.commandName ?? "nil") text=\(update.text ?? "nil") callbackData=\(update.callbackData ?? "nil") callbackQueryID=\(update.callbackQueryID ?? "nil")")
+
         do {
             if let commandName = update.commandName, let handler = registry.commandHandler(for: commandName) {
                 try await handler(makeGlobalContext(text: update.text, callbackData: nil))
@@ -97,6 +99,7 @@ public actor ConversationEngine: ConversationEngineHandle {
             }
 
             var record = await stateStore.load(chatID: update.chatID)
+            logger.debug("dispatch: chat=\(update.chatID) loaded record.activeScene=\(record.activeScene ?? "nil")")
 
             let sceneToRun: AnyScene?
             if let activeSceneName = record.activeScene, let scene = registry.scene(named: activeSceneName) {
@@ -110,11 +113,13 @@ public actor ConversationEngine: ConversationEngineHandle {
             }
 
             guard let scene = sceneToRun else {
+                logger.debug("dispatch: chat=\(update.chatID) no scene matched, unhandledHandler=\(registry.unhandledHandlerIfAny() != nil)")
                 if let unhandledHandler = registry.unhandledHandlerIfAny() {
                     try await unhandledHandler(makeGlobalContext(text: update.text, callbackData: update.callbackData))
                 }
                 return
             }
+            logger.debug("dispatch: chat=\(update.chatID) running scene=\(scene.name)")
 
             let result = try await scene.resume(
                 update: update,
@@ -122,6 +127,8 @@ public actor ConversationEngine: ConversationEngineHandle {
                 savedSession: record.sessionData,
                 dependencies: dependencies
             )
+
+            logger.debug("dispatch: chat=\(update.chatID) scene=\(scene.name) transition=\(result.transition)")
 
             switch result.transition {
             case .moved, .stayed, .rolledBack:
