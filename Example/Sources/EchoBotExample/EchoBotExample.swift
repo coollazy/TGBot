@@ -3,7 +3,9 @@ import TGBot
 
 /// 收集姓名／年齡／性別的多步驟對話流程範例，確認後依「性別 × 每 10 歲一個階層」
 /// 回應不同的總結文字。示範：分支（依輸入是否合法決定 .stay 還是往下走）、
-/// 用 inline 按鈕收集選項（callback_query 那條路徑）、多步驟 session 累積資料。
+/// 用 inline 按鈕收集選項（callback_query 那條路徑）、多步驟 session 累積資料、
+/// 流程中途插入一個長任務（確認後「產生總結」模擬成要跑 5 秒的背景任務，這段期間
+/// bot 仍可正常回應其他訊息，任務完成後才送出總結、結束流程）。
 ///
 /// 這是獨立於 TGBot library 本身的 SwiftPM 專案（見 ../Package.swift 用 local path
 /// 依賴），只 `import TGBot` 這一個 module——刻意模擬真正外部開發者的使用情境。
@@ -20,6 +22,7 @@ struct EchoBotExample {
         case askGender
         case confirmDetails
         case finished
+        case generating
     }
 
     struct ProfileData: Codable {
@@ -132,8 +135,36 @@ struct EchoBotExample {
                 return .end
             }
 
-            try await ctx.reply(summaryText(name: name, age: age, gender: gender))
-            return .end
+            // 示範 US-3／US-6：把「產生總結」模擬成一個要花 5 秒的長任務，這段期間你可以
+            // 正常跟 bot 說其他的話，不會被卡住；任務完成後才真的送出總結文字並結束流程——
+            // 這是 Phase 2 補的功能，之前 onComplete 回傳的 transition 會被直接丟掉，
+            // 使用者永遠等不到這則總結（bot 會看起來像卡住了，其實是通知沒有真的接上）。
+            //
+            // 轉去 .generating 這個專門的「等待中」state，而不是留在 .finished 原地：
+            // 如果留在原地，使用者這段期間傳的任何話都會被 .finished 的「請點選確認按鈕」
+            // 判斷接住，變成很奇怪的體驗（明明已經確認過了，卻一直被叫去點確認按鈕）——
+            // 這是實機測試才發現的落差。
+            try await ctx.reply("產生總結中，請稍候（約 5 秒）...你可以先跟我說別的話，不會被卡住。")
+            ctx.startBackgroundJob(id: "profile-summary", work: { progress in
+                await progress.update("產生總結中")
+                try await Task.sleep(nanoseconds: 5_000_000_000)
+            }, onComplete: { result, taskID, ctx in
+                switch result {
+                case .success:
+                    try await ctx.reply(summaryText(name: name, age: age, gender: gender))
+                case .failure:
+                    try await ctx.reply("產生總結時發生問題，請輸入 /profile 重新開始。")
+                }
+                return .end
+            })
+            return .transition(to: .generating)
+        }
+
+        scene.on(.generating) { ctx in
+            // 背景任務還在跑的期間，使用者傳的任何話都會進到這裡——給一個清楚交代進度的
+            // 回覆，而不是誤導成別的意思。
+            try await ctx.reply("總結還在產生中，完成後會主動通知你，請稍候。")
+            return .stay
         }
 
         return scene
