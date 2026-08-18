@@ -5,7 +5,8 @@ import TGBot
 /// 回應不同的總結文字。示範：分支（依輸入是否合法決定 .stay 還是往下走）、
 /// 用 inline 按鈕收集選項（callback_query 那條路徑）、多步驟 session 累積資料、
 /// 流程中途插入一個長任務（確認後「產生總結」模擬成要跑 5 秒的背景任務，這段期間
-/// bot 仍可正常回應其他訊息，任務完成後才送出總結、結束流程）。
+/// bot 仍可正常回應其他訊息，任務完成後才送出總結、結束流程）、在被問年齡時輸入
+/// 「上一步」可以體驗 Transition.rollback 真的退回上一步（重新輸入名字），不是原地不動。
 ///
 /// 這是獨立於 TGBot library 本身的 SwiftPM 專案（見 ../Package.swift 用 local path
 /// 依賴），只 `import TGBot` 這一個 module——刻意模擬真正外部開發者的使用情境。
@@ -75,14 +76,22 @@ struct EchoBotExample {
         scene.on(.askAge) { ctx in
             // 上一步問的是名字，這裡收到的就是名字
             ctx.session.name = ctx.text
-            try await ctx.reply("\(ctx.session.name ?? "你")幾歲呢？請輸入數字。")
+            try await ctx.reply("\(ctx.session.name ?? "你")幾歲呢？請輸入數字（也可以輸入「上一步」回去重新輸入名字）。")
             return .transition(to: .askGender)
         }
 
         scene.on(.askGender) { ctx in
+            // 示範 US-2：Transition.rollback 現在真的會退回歷史棧記錄的「上一步」
+            // （這裡是問名字、順便問年齡的那個 state），不是原地不動——輸入「上一步」
+            // 就能重新輸入名字，年齡會用你重新輸入名字之後、下一次被問到時再填。
+            if ctx.text == "上一步" {
+                try await ctx.reply("好，我們重新來，請再輸入一次名字：")
+                return .rollback
+            }
+
             // 上一步問的是年齡；輸入不合法就留在原地重試（對應 US-2：錯誤發生時退回重試）
             guard let text = ctx.text, let age = Int(text), age >= 0, age <= 150 else {
-                try await ctx.reply("這個年齡看起來怪怪的，請輸入一個 0～150 之間的數字。")
+                try await ctx.reply("這個年齡看起來怪怪的，請輸入一個 0～150 之間的數字，或輸入「上一步」重新輸入名字。")
                 return .stay
             }
             ctx.session.age = age

@@ -158,6 +158,7 @@ public actor ConversationEngine: ConversationEngineHandle {
                 sceneToRun = scene
                 record.activeScene = scene.name
                 record.currentStateData = nil // 全新進入，交給 AnyScene 用 scene.initial
+                record.stateHistory = [] // 全新進入，不該帶著上一段（可能是別的 scene）的歷史
             } else {
                 sceneToRun = nil
             }
@@ -175,6 +176,7 @@ public actor ConversationEngine: ConversationEngineHandle {
                 update: update,
                 savedState: record.currentStateData,
                 savedSession: record.sessionData,
+                stateHistory: record.stateHistory,
                 dependencies: dependencies
             )
 
@@ -182,10 +184,10 @@ public actor ConversationEngine: ConversationEngineHandle {
 
             switch result.transition {
             case .moved, .stayed, .rolledBack:
-                // TODO: rollback 需要歷史棧配合，下一階段實作；目前先當作停留處理
                 record.activeScene = scene.name
                 record.currentStateData = result.newState
                 record.sessionData = result.newSession
+                record.stateHistory = result.newHistory
                 await stateStore.save(chatID: update.chatID, record)
             case .ended:
                 record.reset()
@@ -195,7 +197,10 @@ public actor ConversationEngine: ConversationEngineHandle {
             }
         } catch {
             logger.error("scene resume failed for chat \(update.chatID): \(error)")
-            // TODO: 6.5 節「自動 rollback」還沒做（要等 Phase 3 的狀態歷史棧才有東西可以退回）。
+            // TODO: 6.5 節「handler 拋錯時自動 rollback」還沒做——狀態歷史棧本身已經有了
+            // （見 Transition.rollback／AnyScene），但那是「開發者自己決定要退回」的路徑；
+            // 這裡是「handler 拋出未接住的例外」，要不要自動幫開發者退回上一步、還是維持
+            // 現狀讓開發者自己在 onError 裡決定，是另一個設計取捨，留待有實際需求再做。
             // onError hook 已經接上：開發者有註冊的話，這裡額外通知，讓他們能自己決定要不要
             // 回訊息給使用者、要不要額外上報；用 try? 是因為 hook 本身如果又拋錯，不該讓
             // dispatch 整個掛掉——原本的錯誤已經記過 log 了。

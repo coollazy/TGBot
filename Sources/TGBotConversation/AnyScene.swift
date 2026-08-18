@@ -19,12 +19,12 @@ struct SceneDependencies: Sendable {
 /// 沒抓到。即使公開，開發者一般也不會直接建構或操作它，仍然算是「內部實作示意」的角色。
 public struct AnyScene: Sendable {
     let name: String
-    private let _resume: @Sendable (Update, _ savedState: Data?, _ savedSession: Data, SceneDependencies)
-        async throws -> (transition: TransitionKind, newState: Data?, newSession: Data)
+    private let _resume: @Sendable (Update, _ savedState: Data?, _ savedSession: Data, _ stateHistory: [Data], SceneDependencies)
+        async throws -> (transition: TransitionKind, newState: Data?, newSession: Data, newHistory: [Data])
 
     public init<State: ConversationState, Session: Codable & Sendable>(_ scene: Scene<State, Session>) {
         self.name = scene.name
-        self._resume = { update, savedStateData, savedSessionData, dependencies in
+        self._resume = { update, savedStateData, savedSessionData, stateHistory, dependencies in
             let decoder = JSONDecoder()
             let encoder = JSONEncoder()
 
@@ -38,7 +38,7 @@ public struct AnyScene: Sendable {
 
             guard let handler = scene.handlers.handler(for: state) else {
                 // 這個 state 沒有註冊 handler：視為停留原地，不改變任何東西
-                return (.stayed, try encoder.encode(state), try encoder.encode(session))
+                return (.stayed, try encoder.encode(state), try encoder.encode(session), stateHistory)
             }
 
             let ctx = Context<State, Session>(
@@ -59,14 +59,20 @@ public struct AnyScene: Sendable {
 
             switch transition {
             case .transition(to: let newState):
-                return (.moved, try encoder.encode(newState), try encoder.encode(ctx.session))
+                // 往下走之前，把「現在正要離開的這個 state」推進歷史棧——這是 .rollback
+                // 要退回去的目標。US-2：退回上一步重試，不是回到最開始。
+                let newHistory = stateHistory + [try encoder.encode(state)]
+                return (.moved, try encoder.encode(newState), try encoder.encode(ctx.session), newHistory)
             case .stay:
-                return (.stayed, try encoder.encode(state), try encoder.encode(ctx.session))
+                return (.stayed, try encoder.encode(state), try encoder.encode(ctx.session), stateHistory)
             case .end:
-                return (.ended, nil, try encoder.encode(ctx.session))
+                return (.ended, nil, try encoder.encode(ctx.session), [])
             case .rollback:
-                // TODO: rollback 需要歷史棧配合，下一階段實作
-                return (.rolledBack, try encoder.encode(state), try encoder.encode(ctx.session))
+                guard let previousStateData = stateHistory.last else {
+                    // 沒有更早的步驟可以退——不當成錯誤，單純停在原地沒有效果
+                    return (.stayed, try encoder.encode(state), try encoder.encode(ctx.session), stateHistory)
+                }
+                return (.rolledBack, previousStateData, try encoder.encode(ctx.session), Array(stateHistory.dropLast()))
             case .interrupt:
                 // TODO: scene 棧的暫停/恢復，下一階段實作
                 fatalError("AnyScene interrupt 尚未實作")
@@ -78,8 +84,9 @@ public struct AnyScene: Sendable {
         update: Update,
         savedState: Data?,
         savedSession: Data,
+        stateHistory: [Data],
         dependencies: SceneDependencies
-    ) async throws -> (transition: TransitionKind, newState: Data?, newSession: Data) {
-        try await _resume(update, savedState, savedSession, dependencies)
+    ) async throws -> (transition: TransitionKind, newState: Data?, newSession: Data, newHistory: [Data]) {
+        try await _resume(update, savedState, savedSession, stateHistory, dependencies)
     }
 }
