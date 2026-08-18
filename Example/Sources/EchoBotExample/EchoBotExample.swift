@@ -44,7 +44,7 @@ struct EchoBotExample {
 
         let bot = TGBot(configuration: configuration)
         let profile = makeProfileScene()
-        bot.register(profile, trigger: .command("profile"))
+        bot.register(profile, trigger: .command("profile"), description: "開始填寫個人資料")
 
         // 全域指令：取消目前流程（US-5），description 會自動同步進 Telegram 的指令選單。
         bot.onCommand("cancel", description: "取消目前進行中的流程") { ctx in
