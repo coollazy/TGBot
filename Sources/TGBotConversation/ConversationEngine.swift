@@ -82,6 +82,14 @@ public actor ConversationEngine: ConversationEngineHandle {
             )
         }
 
+        // Telegram 規定收到 callback_query 要確認收到，不然按鈕在使用者端會一直卡在
+        // 「處理中」的狀態——這件事開發者不需要知道也不需要自己做，框架在分派前先處理掉。
+        // 用 try? 是因為就算確認失敗（例如按鈕太舊、query 已過期），也不該讓整個
+        // dispatch 因此中斷；正常的 handler 邏輯還是要照跑。
+        if let callbackQueryID = update.callbackQueryID {
+            try? await apiClient.answerCallbackQuery(callbackQueryID: callbackQueryID)
+        }
+
         do {
             if let commandName = update.commandName, let handler = registry.commandHandler(for: commandName) {
                 try await handler(makeGlobalContext(text: update.text, callbackData: nil))

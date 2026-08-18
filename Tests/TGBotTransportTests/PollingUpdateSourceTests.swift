@@ -51,6 +51,7 @@ struct PollingUpdateSourceTests {
 
         func sendMessage(chatID: Int64, text: String, inlineKeyboard: [[TGInlineKeyboardButton]]?) async throws {}
         func setMyCommands(_ commands: [(name: String, description: String)]) async throws {}
+        func answerCallbackQuery(callbackQueryID: String, text: String?) async throws {}
     }
 
     struct DummyError: Error {}

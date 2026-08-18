@@ -25,12 +25,21 @@ public protocol TelegramAPIClient: Sendable {
     func sendMessage(chatID: Int64, text: String, inlineKeyboard: [[TGInlineKeyboardButton]]?) async throws
     func getUpdates(offset: Int?, timeout: Int) async throws -> [Update]
     func setMyCommands(_ commands: [(name: String, description: String)]) async throws
+    /// Telegram 規定收到 callback_query 後要呼叫這個確認收到，不然使用者端的按鈕會一直
+    /// 卡在「處理中」的視覺狀態——即使機器人其實已經正常處理完、也回了新訊息。
+    /// text 是可選的小提示（會用 toast 顯示在使用者畫面上），大多數情況不需要，見 extension 的語法糖版本。
+    func answerCallbackQuery(callbackQueryID: String, text: String?) async throws
 }
 
 extension TelegramAPIClient {
     /// 不帶按鈕的純文字訊息，語法糖版本，protocol 本身不能給預設參數值，用 extension 補上。
     public func sendMessage(chatID: Int64, text: String) async throws {
         try await sendMessage(chatID: chatID, text: text, inlineKeyboard: nil)
+    }
+
+    /// 不帶提示文字的版本，絕大多數情況只是要「確認收到」，用這個就夠了。
+    public func answerCallbackQuery(callbackQueryID: String) async throws {
+        try await answerCallbackQuery(callbackQueryID: callbackQueryID, text: nil)
     }
 }
 
@@ -113,6 +122,22 @@ public final class URLSessionTelegramAPIClient: TelegramAPIClient, @unchecked Se
         }
         let body = Body(commands: commands.map { Command(command: $0.name, description: $0.description) })
         _ = try await post(path: "setMyCommands", body: body, responseType: Bool.self)
+    }
+
+    public func answerCallbackQuery(callbackQueryID: String, text: String?) async throws {
+        struct Body: Encodable {
+            let callbackQueryID: String
+            let text: String?
+            enum CodingKeys: String, CodingKey {
+                case callbackQueryID = "callback_query_id"
+                case text
+            }
+        }
+        _ = try await post(
+            path: "answerCallbackQuery",
+            body: Body(callbackQueryID: callbackQueryID, text: text),
+            responseType: Bool.self
+        )
     }
 
     // MARK: - 內部共用邏輯

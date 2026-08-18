@@ -10,13 +10,19 @@ public struct Update: Sendable {
     public let callbackData: String?
     public let commandName: String?
 
+    /// 只有 callback_query 類型的 Update 才會有值。Telegram 規定收到 callback_query 後
+    /// 要呼叫 answerCallbackQuery 確認收到，不然按鈕在使用者端會一直卡在「處理中」
+    /// ——這個欄位就是用來讓框架能自動做這件事，開發者不需要自己管。
+    public let callbackQueryID: String?
+
     public init(
         updateID: Int64 = 0,
         chatID: Int64,
         userID: Int64? = nil,
         text: String? = nil,
         callbackData: String? = nil,
-        commandName: String? = nil
+        commandName: String? = nil,
+        callbackQueryID: String? = nil
     ) {
         self.updateID = updateID
         self.chatID = chatID
@@ -24,5 +30,6 @@ public struct Update: Sendable {
         self.text = text
         self.callbackData = callbackData
         self.commandName = commandName
+        self.callbackQueryID = callbackQueryID
     }
 }
