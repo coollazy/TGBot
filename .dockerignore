@@ -1,0 +1,18 @@
+# 建置 image 的 context 是 repo 根目錄（見 Example/docker-compose.yml 的
+# build.context: ..），這裡把不需要／不該進 image 的東西排除掉，讓 context 小一點、
+# 也避免不小心把本機的 .env（裡面有真的 bot token）打包進 image 裡。
+.git
+.build
+.swiftpm
+DerivedData
+*.xcodeproj
+.vscode
+.DS_Store
+.env
+.env.*
+!.env.example
+Example/.build
+Example/.swiftpm
+Example/.env
+Example/.env.*
+!Example/.env.example

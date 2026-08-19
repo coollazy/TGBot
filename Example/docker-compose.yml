@@ -1,0 +1,16 @@
+# 用法：
+#   cp .env.example .env   # 填入你自己的 TGBOT_TOKEN
+#   docker compose up --build
+#
+# build.context 是上一層（repo 根目錄），不是這個資料夾本身——因為 Example/Package.swift
+# 用 local path 依賴上一層的 TGBot library（.package(path: "..")），Dockerfile 需要
+# 同時拿到 TGBot 本體跟 Example 的原始碼才能建置，細節見 Dockerfile 開頭的說明。
+services:
+  bot:
+    build:
+      context: ..
+      dockerfile: Example/Dockerfile
+    env_file:
+      - .env
+    restart: unless-stopped
+    # 這是個長時間 polling Telegram 的 bot，沒有對外開放任何 port，不需要 ports 設定。
