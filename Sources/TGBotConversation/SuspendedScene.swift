@@ -9,10 +9,20 @@ public struct SuspendedScene: Sendable {
     public let scene: AnyScene
     public let savedState: Data
     public let savedSession: Data
+    /// 非 nil 代表這次中斷是用 `.interrupt(with:onReturn:)` 觸發的——子流程用
+    /// `.end(with:)` 帶結果結束時，會呼叫這個 handler 把結果交回來；nil 代表舊版純中斷
+    /// （或沒有註冊 onReturn），恢復時只走 `onResume` 那條路徑。
+    public let returnHandler: AnyInterruptReturnHandler?
 
-    public init(scene: AnyScene, savedState: Data, savedSession: Data) {
+    public init(
+        scene: AnyScene,
+        savedState: Data,
+        savedSession: Data,
+        returnHandler: AnyInterruptReturnHandler? = nil
+    ) {
         self.scene = scene
         self.savedState = savedState
         self.savedSession = savedSession
+        self.returnHandler = returnHandler
     }
 }

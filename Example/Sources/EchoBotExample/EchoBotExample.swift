@@ -6,9 +6,13 @@ import TGBot
 /// 用 inline 按鈕收集選項（callback_query 那條路徑）、多步驟 session 累積資料、
 /// 流程中途插入一個長任務（確認後「產生總結」模擬成要跑 5 秒的背景任務，這段期間
 /// bot 仍可正常回應其他訊息，任務完成後才送出總結、結束流程）、在被問年齡時輸入
-/// 「上一步」可以體驗 Transition.rollback 真的退回上一步（重新輸入名字），不是原地不動、
-/// 輸入「小提示」可以體驗 Transition.interrupt：暫停填資料的流程、岔去跑一個完全獨立的
-/// 小提示子流程，子流程結束後自動接回原本填到一半、沒填完的地方繼續（不是重新開始）。
+/// 「上一步」可以體驗 Transition.rollback 真的退回上一步（重新輸入名字），不是原地不動。
+///
+/// 另外示範兩種不同用途的 Transition.interrupt 子流程：輸入「小提示」是**唯讀查詢型**——
+/// 暫停填資料的流程、岔去跑一個完全獨立的小提示子流程，不需要子流程回傳任何資料，結束後
+/// 自動接回原本填到一半、沒填完的地方繼續；輸入「填地址」則是**資料收集型**——子流程要
+/// 收集地址、還要把收集到的結果帶回填資料這個主流程繼續用（用 `.interrupt(with:onReturn:)` +
+/// `.end(with:)`），這才是子流程真正常見的用法。
 ///
 /// 這是獨立於 TGBot library 本身的 SwiftPM 專案（見 ../Package.swift 用 local path
 /// 依賴），只 `import TGBot` 這一個 module——刻意模擬真正外部開發者的使用情境。
@@ -32,6 +36,7 @@ struct EchoBotExample {
         var name: String?
         var age: Int?
         var gender: String? // "male" / "female"
+        var address: String? // 由「填地址」子流程透過 .interrupt(with:onReturn:) 帶回來
     }
 
     static func main() async throws {
@@ -57,7 +62,13 @@ struct EchoBotExample {
         let tips = makeTipsScene()
         bot.register(tips, trigger: .command("tips"), description: "查看這個範例的小提示")
 
-        let profile = makeProfileScene(tipsScene: tips)
+        // 填地址子流程：同樣需要能被 registry 查到才能被中斷帶進來。跟 tips 不一樣的地方是
+        // 它結束時會帶著使用者填的地址回去給 /profile（見 .askGender 裡的「填地址」判斷），
+        // 不是單純的唯讀查詢。
+        let address = makeAddressScene()
+        bot.register(address, trigger: .command("address"), description: "單獨測試填地址子流程")
+
+        let profile = makeProfileScene(tipsScene: tips, addressScene: address)
         bot.register(profile, trigger: .command("profile"), description: "開始填寫個人資料")
 
         // 全域指令：取消目前流程（US-5），description 會自動同步進 Telegram 的指令選單。
@@ -74,7 +85,10 @@ struct EchoBotExample {
     /// 再問下一個問題、轉移到下一個 state——例如 .askAge 的 handler 收到的
     /// ctx.text 其實是使用者對「你叫什麼名字？」的回答（名字），不是年齡；
     /// 進到 .askAge 這個 state 本身才是要問年齡。
-    static func makeProfileScene(tipsScene: Scene<TipsState, EmptySession>) -> Scene<ProfileState, ProfileData> {
+    static func makeProfileScene(
+        tipsScene: Scene<TipsState, EmptySession>,
+        addressScene: Scene<AddressState, EmptySession>
+    ) -> Scene<ProfileState, ProfileData> {
         let scene = Scene<ProfileState, ProfileData>(name: "profile", initial: .askName, initialSession: ProfileData())
 
         scene.on(.askName) { ctx in
@@ -86,7 +100,7 @@ struct EchoBotExample {
         scene.on(.askAge) { ctx in
             // 上一步問的是名字，這裡收到的就是名字
             ctx.session.name = ctx.text
-            try await ctx.reply("\(ctx.session.name ?? "你")幾歲呢？請輸入數字（也可以輸入「上一步」回去重新輸入名字、「小提示」查看提示）。")
+            try await ctx.reply("\(ctx.session.name ?? "你")幾歲呢？請輸入數字（也可以輸入「上一步」回去重新輸入名字、「小提示」查看提示、「填地址」先去填地址）。")
             return .transition(to: .askGender)
         }
 
@@ -99,16 +113,29 @@ struct EchoBotExample {
                 return .rollback
             }
 
-            // 示範 US-1：Transition.interrupt 讓填資料的流程可以暫停自己、岔去跑一個
-            // 完全獨立的子流程（小提示），跟填資料本身無關；子流程結束後會自動接回這裡
-            // 繼續問年齡，不是重新開始整個 /profile。之前這裡直接 fatalError，完全沒實作。
+            // 示範 US-1（唯讀查詢型子流程）：Transition.interrupt 讓填資料的流程可以暫停
+            // 自己、岔去跑一個完全獨立的子流程（小提示），跟填資料本身無關，不需要子流程
+            // 回傳任何資料；子流程結束後會自動接回這裡繼續問年齡，不是重新開始整個
+            // /profile。之前這裡直接 fatalError，完全沒實作。
             if ctx.text == "小提示" {
                 return .interrupt(with: AnyScene(tipsScene))
             }
 
+            // 示範 US-1（資料收集型子流程）：跟小提示不一樣，填地址子流程結束時真的有
+            // 資料要交還——用 .interrupt(with:onReturn:) 帶一個型別化回調，子流程用
+            // .end(with:) 結束時會自動被呼叫，拿到的 address 就是使用者在子流程裡填的
+            // 地址，直接存進主流程自己的 session，不需要透過任何外部共享狀態繞過去。
+            if ctx.text == "填地址" {
+                return .interrupt(with: AnyScene(addressScene)) { (address: String, ctx: Context<ProfileState, ProfileData>) in
+                    ctx.session.address = address
+                    try await ctx.reply("已收到地址：\(address)。我們繼續填資料：\(ctx.session.name ?? "你")幾歲呢？請輸入數字。")
+                    return .stay
+                }
+            }
+
             // 上一步問的是年齡；輸入不合法就留在原地重試（對應 US-2：錯誤發生時退回重試）
             guard let text = ctx.text, let age = Int(text), age >= 0, age <= 150 else {
-                try await ctx.reply("這個年齡看起來怪怪的，請輸入一個 0～150 之間的數字，或輸入「上一步」重新輸入名字、「小提示」查看提示。")
+                try await ctx.reply("這個年齡看起來怪怪的，請輸入一個 0～150 之間的數字，或輸入「上一步」重新輸入名字、「小提示」查看提示、「填地址」先去填地址。")
                 return .stay
             }
             ctx.session.age = age
@@ -138,13 +165,16 @@ struct EchoBotExample {
 
             let name = ctx.session.name ?? "（未填寫）"
             let age = ctx.session.age.map(String.init) ?? "（未填寫）"
+            // 有填地址（走過「填地址」子流程）才顯示這一行，沒填的話（沒體驗過子流程資料
+            // 交還的示範）維持原本的三行確認畫面，不強迫使用者一定要走過那個子流程。
+            let addressLine = ctx.session.address.map { "\n地址：\($0)" } ?? ""
 
             try await ctx.replyWithMenu(
                 """
                 請確認以下資料：
                 姓名：\(name)
                 年齡：\(age)
-                性別：\(genderLabel)
+                性別：\(genderLabel)\(addressLine)
                 """,
                 buttons: [[InlineButton(text: "確認", callbackData: "confirm")]]
             )
@@ -177,7 +207,7 @@ struct EchoBotExample {
             }, onComplete: { result, taskID, ctx in
                 switch result {
                 case .success:
-                    try await ctx.reply(summaryText(name: name, age: age, gender: gender))
+                    try await ctx.reply(summaryText(name: name, age: age, gender: gender, address: ctx.session.address))
                 case .failure:
                     try await ctx.reply("產生總結時發生問題，請輸入 /profile 重新開始。")
                 }
@@ -247,8 +277,34 @@ struct EchoBotExample {
         return scene
     }
 
-    /// 依「性別 × 每 10 歲一個階層」產生不同的總結文字。
-    static func summaryText(name: String, age: Int, gender: String) -> String {
+    enum AddressState: ConversationState {
+        case askAddress
+        case receiveAddress
+    }
+
+    /// 跟 tips 一樣完全獨立、可以自己用 /address 直接啟動，也可以被 /profile 中斷帶進來
+    /// （見 .askGender 裡的「填地址」判斷）——但跟 tips 不同的地方是：這個子流程結束時
+    /// 帶著的結果（使用者填的地址）會被中斷它的流程用 onReturn 接住繼續用，不是單純的
+    /// 唯讀查詢。.askAddress 是入口（忽略觸發用的文字，直接問地址），.receiveAddress
+    /// 收到答案後用 `.end(with:)` 把結果帶出去。
+    static func makeAddressScene() -> Scene<AddressState, EmptySession> {
+        let scene = Scene<AddressState, EmptySession>(name: "address", initial: .askAddress)
+
+        scene.on(.askAddress) { ctx in
+            try await ctx.reply("請輸入你的地址：")
+            return .transition(to: .receiveAddress)
+        }
+
+        scene.on(.receiveAddress) { ctx in
+            return try .end(with: ctx.text ?? "")
+        }
+
+        return scene
+    }
+
+    /// 依「性別 × 每 10 歲一個階層」產生不同的總結文字，如果有地址（走過「填地址」子流程）
+    /// 就一併帶上——證明子流程交還回來的資料不只是能存進 session，最後真的能被用在下游。
+    static func summaryText(name: String, age: Int, gender: String, address: String? = nil) -> String {
         let bracketStart = (age / 10) * 10
         let bracketLabel = "\(bracketStart)～\(bracketStart + 9) 歲"
         let genderLabel = gender == "male" ? "男性" : "女性"
@@ -277,6 +333,8 @@ struct EchoBotExample {
             ? "身為一位穩重的\(genderLabel)，"
             : "身為一位活力十足的\(genderLabel)，"
 
-        return "\(name)，你好！你屬於「\(bracketLabel)」這個階層。\(genderNote)\(vibe)"
+        let addressNote = address.map { "（收件地址：\($0)）" } ?? ""
+
+        return "\(name)，你好！你屬於「\(bracketLabel)」這個階層。\(genderNote)\(vibe)\(addressNote)"
     }
 }

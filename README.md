@@ -115,23 +115,37 @@ actor，處理所有聊天室的事件。同一個聊天室的事件保證依序
 `pendingCompletions`（背景任務完成回呼字典）、`chatTails`／序列化用的內部狀態如果之後有加的話，
 確保拆開之後每個 chatID 各自的資料還是正確地綁在對的 actor 上，不會互相污染。
 
-### 子流程結果不會自動傳回被中斷的流程
+### 子流程結果傳回被中斷的流程（`onReturn` 不能再串接新的 interrupt）
 
-**現況**：`Transition.interrupt(with:)`（見 `Sources/TGBotConversation/AnyScene.swift`）
-支援暫停目前的流程、跑一個獨立的子流程，子流程 `.end` 之後也會自動恢復原本被中斷的地方
-繼續（包含可選的 `Scene.onResume(_:handler:)` hook，讓開發者在恢復當下主動交代現在在等
-什麼）。但子流程執行過程中收集到的資料，不會自動交還給被中斷的那個流程——例如一個「收集
-地址」的子流程，使用者填完地址之後，主流程沒有辦法直接讀到「使用者剛剛填的地址是什麼」。
+**現況**：`Transition.interrupt(with:)` 支援暫停目前的流程、跑一個獨立的子流程，子流程
+`.end` 之後自動恢復原本被中斷的地方繼續。子流程如果需要把收集到的資料交還給被中斷的
+流程（例如一個「收集地址」的子流程，結束後主流程要能直接讀到使用者填的地址），用
+`.interrupt(with:onReturn:)` 這個重載——子流程用 `.end(with:)` 帶著型別化的結果結束時，
+會自動呼叫 `onReturn`，開發者在裡面決定拿到結果後接下來要做什麼（存進 session、回話、
+繼續往下走一個 state、甚至再 `.end(with:)` 讓結果繼續往更上層被中斷的流程傳）。見
+`Sources/TGBotConversation/Transition.swift`、`AnyInterruptReturnHandler.swift`，
+`Example/` 的「填地址」子流程（在 `/profile` 問年齡時輸入「填地址」）是一個端對端的範例。
 
-**為什麼現在不做**：這是刻意跟使用者確認過的最小版本範圍——「自動恢復」跟「資料交還」是
-兩件複雜度差很多的事，前者只需要記住「暫停當下的 state/session」，後者需要設計一個
-型別安全、跨兩個不同 State/Session 型別的資料傳遞機制，牽涉到的 API 設計問題比較大，
-先不在這次的範圍內。
+沒有帶結果需求的子流程（例如唯讀查詢型，`Example` 的「小提示」）維持用原本的
+`.interrupt(with:)`（不帶 `onReturn`），行為完全不變。
 
-**現在的暫時解法**：如果真的需要子流程結果，開發者可以自己透過外部共享狀態繞過去（例如
-把結果寫進一個開發者自己維護的字典，key 用 chatID，主流程恢復時自己去讀），不是框架
-提供的能力，是繞道的做法。
+**殘留的限制**：`onReturn` 回傳的 `Transition` 裡如果又是 `.interrupt(...)`（想在拿到
+結果後立刻再岔去跑下一個子流程），不支援——會安全退化成 `.stay` 並記一則 debug log，
+不會 crash、也不會卡在半調子的狀態，但也不會如預期地串起下一個子流程。
 
-**以後要做的話**：可能的方向是讓 `.interrupt(with:)` 除了子流程本身，還能帶一個
-「子流程結束時要把什麼資料交還」的型別化管道，或是讓 `onResume` 除了通知「恢復了」，
-也能拿到子流程留下的結果——確切的 API 長相還沒設計，需要额外的討論。
+**為什麼現在不做**：這跟既有的「背景任務完成觸發 `.interrupt` 不支援」是同一種限制：
+自動觸發的路徑（子流程結束、或背景任務完成）都不支援連續觸發新的 interrupt，只有
+「使用者真的送出一則新訊息」這條路徑才能觸發 interrupt。要讓 `onReturn` 也能安全地
+再次 `.interrupt`，需要在 `onReturn` 內部拿到「目前這個（父）scene 本身」才能重新包一個
+`SuspendedScene`——但 `onReturn` 是透過 `Transition.interrupt(with:onReturn:)` 這個
+靜態方法建構的，這個時間點還沒有「目前這個 scene」的參照可以捕捉，要解決的話得改變
+`.interrupt(with:onReturn:)` 的呼叫方式（例如改成 `Scene` 的 instance method 而非
+`Transition` 的靜態方法），影響範圍比這次的核心需求（資料交還）大，先不在這次的範圍內。
+
+**現在的暫時解法**：需要在拿到子流程結果後立刻串下一個子流程的話，讓 `onReturn` 把結果
+存好、`.stay`，交給下一次使用者真的送訊息時，由正常的 `on(state)` handler 再觸發下一個
+`.interrupt`——不如「onReturn 直接串接」順手，但不需要繞道外部共享狀態。
+
+**以後要做的話**：把 `.interrupt(with:onReturn:)` 改成能拿到「目前這個 scene」參照的
+呼叫方式，讓 `onReturn` 內部也能安全建構 `SuspendedScene`，重用既有的 `.interrupted`
+處理邏輯。

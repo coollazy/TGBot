@@ -26,7 +26,8 @@ public struct AnyScene: Sendable {
             newSession: Data,
             newHistory: [Data],
             suspended: SuspendedScene?,
-            interruptingScene: AnyScene?
+            interruptingScene: AnyScene?,
+            resultData: Data?
         )
     private let _notifyResumed: @Sendable (Int64, Int64?, Data, Data, SceneDependencies) async throws -> Void
 
@@ -66,7 +67,7 @@ public struct AnyScene: Sendable {
 
             guard let handler = scene.handlers.handler(for: state) else {
                 // 這個 state 沒有註冊 handler：視為停留原地，不改變任何東西
-                return (.stayed, try encoder.encode(state), try encoder.encode(session), stateHistory, nil, nil)
+                return (.stayed, try encoder.encode(state), try encoder.encode(session), stateHistory, nil, nil, nil)
             }
 
             let ctx = Context<State, Session>(
@@ -90,17 +91,22 @@ public struct AnyScene: Sendable {
                 // 往下走之前，把「現在正要離開的這個 state」推進歷史棧——這是 .rollback
                 // 要退回去的目標。US-2：退回上一步重試，不是回到最開始。
                 let newHistory = stateHistory + [try encoder.encode(state)]
-                return (.moved, try encoder.encode(newState), try encoder.encode(ctx.session), newHistory, nil, nil)
+                return (.moved, try encoder.encode(newState), try encoder.encode(ctx.session), newHistory, nil, nil, nil)
             case .stay:
-                return (.stayed, try encoder.encode(state), try encoder.encode(ctx.session), stateHistory, nil, nil)
+                return (.stayed, try encoder.encode(state), try encoder.encode(ctx.session), stateHistory, nil, nil, nil)
             case .end:
-                return (.ended, nil, try encoder.encode(ctx.session), [], nil, nil)
+                return (.ended, nil, try encoder.encode(ctx.session), [], nil, nil, nil)
+            case .endWithResult(let resultData):
+                // 跟 .end 完全一樣，只是多把編碼好的結果原樣帶出去——ConversationEngine
+                // 只有在被彈出的 SuspendedScene 真的有註冊 returnHandler 時才會用到它，
+                // 否則（例如這個 scene 根本不是被中斷帶進來的）就跟 plain .end 沒有差別。
+                return (.ended, nil, try encoder.encode(ctx.session), [], nil, nil, resultData)
             case .rollback:
                 guard let previousStateData = stateHistory.last else {
                     // 沒有更早的步驟可以退——不當成錯誤，單純停在原地沒有效果
-                    return (.stayed, try encoder.encode(state), try encoder.encode(ctx.session), stateHistory, nil, nil)
+                    return (.stayed, try encoder.encode(state), try encoder.encode(ctx.session), stateHistory, nil, nil, nil)
                 }
-                return (.rolledBack, previousStateData, try encoder.encode(ctx.session), Array(stateHistory.dropLast()), nil, nil)
+                return (.rolledBack, previousStateData, try encoder.encode(ctx.session), Array(stateHistory.dropLast()), nil, nil, nil)
             case .interrupt(let newScene):
                 // 把「現在這個 scene，暫停當下的 state/session」包成 SuspendedScene 推上
                 // sceneStack，讓 newScene 開始跑；newScene .end 的時候，ConversationEngine
@@ -109,15 +115,24 @@ public struct AnyScene: Sendable {
                 // 「自己完整建構好的 self」可以直接參照，重新包一份等價的是最直接的做法。
                 //
                 // 已知限制（最小版本，範圍已跟使用者確認過）：暫停的 stateHistory 不會被
-                // 保留，恢復之後這個 scene 的 rollback 歷史是空的；子流程執行完的結果也
-                // 不會自動傳回給被中斷的流程，開發者要自己想辦法（例如透過外部共享狀態），
-                // 這兩點都留待有實際需求再做。
+                // 保留，恢復之後這個 scene 的 rollback 歷史是空的。子流程結果要傳回來，
+                // 用下面的 .interruptWithReturn（`.interrupt(with:onReturn:)`）。
                 let suspended = SuspendedScene(
                     scene: AnyScene(scene),
                     savedState: try encoder.encode(state),
                     savedSession: try encoder.encode(ctx.session)
                 )
-                return (.interrupted, nil, Data(), [], suspended, newScene)
+                return (.interrupted, nil, Data(), [], suspended, newScene, nil)
+            case .interruptWithReturn(let newScene, let returnHandler):
+                // 跟 .interrupt 完全一樣，只是多把 returnHandler 一起存進 SuspendedScene，
+                // 讓 ConversationEngine 在子流程用 .end(with:) 帶結果彈回來時能呼叫它。
+                let suspended = SuspendedScene(
+                    scene: AnyScene(scene),
+                    savedState: try encoder.encode(state),
+                    savedSession: try encoder.encode(ctx.session),
+                    returnHandler: returnHandler
+                )
+                return (.interrupted, nil, Data(), [], suspended, newScene, nil)
             }
         }
     }
@@ -134,7 +149,8 @@ public struct AnyScene: Sendable {
         newSession: Data,
         newHistory: [Data],
         suspended: SuspendedScene?,
-        interruptingScene: AnyScene?
+        interruptingScene: AnyScene?,
+        resultData: Data?
     ) {
         try await _resume(update, savedState, savedSession, stateHistory, dependencies)
     }

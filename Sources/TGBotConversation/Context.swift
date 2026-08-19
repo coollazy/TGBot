@@ -88,7 +88,14 @@ public final class Context<State: ConversationState, Session: Codable & Sendable
                     case .end:
                         kind = .ended
                         newStateData = nil
-                    case .interrupt:
+                    case .endWithResult:
+                        // 這條通道（背景任務完成觸發的 transition）本來就不支援 interrupt／
+                        // 結果交還語意，跟既有的 .interrupt case 一樣，結果資料沒有地方可以
+                        // 送達，安靜忽略，行為等同不帶 payload 的 .end。
+                        kind = .ended
+                        newStateData = nil
+                    case .interrupt, .interruptWithReturn:
+                        // onReturn（如果有的話）一併被忽略，理由同上。
                         kind = .interrupted
                         newStateData = nil
                     }
