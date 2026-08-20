@@ -10,12 +10,12 @@ TGBot 處理。
 
 ## 安裝
 
-目前尚未發佈到任何 git host，用本地路徑依賴（跟 `Example/Package.swift` 的做法一樣）：
+Repo 在 [github.com/coollazy/TGBot](https://github.com/coollazy/TGBot)，用一般的 URL 依賴：
 
 ```swift
 // Package.swift
 dependencies: [
-    .package(path: "../TGBot")
+    .package(url: "https://github.com/coollazy/TGBot.git", branch: "master")
 ],
 targets: [
     .executableTarget(
@@ -27,7 +27,17 @@ targets: [
 ]
 ```
 
-之後若推上 git host，改成一般的 URL 依賴即可，用法不變。
+還沒有正式 release tag，先用 `branch: "master"` 追蹤主線；之後有 tag 了可以換成
+`.upToNextMajor(from:)` 之類的版本鎖定寫法。
+
+如果是在這個 repo 本身底下開發、順便寫一個依賴它的 bot（例如 `Example/` 的做法），
+用本地路徑依賴會比較方便，改動 library 馬上就看得到效果，不用等 push：
+
+```swift
+dependencies: [
+    .package(path: "../TGBot")
+]
+```
 
 ## 最小上手範例
 
@@ -64,6 +74,22 @@ struct MyBot {
 export TGBOT_TOKEN="123456:AAAA-your-bot-token-from-BotFather"
 swift run
 ```
+
+### 用 Docker 跑 Example
+
+`Example/` 底下有 `Dockerfile`／`docker-compose.yml`／`.env.example`，可以直接打包成
+image 丟到 Linux 上跑（例如驗證長時間輪詢的穩定度，而不是只在本機跑幾分鐘）：
+
+```bash
+cd Example
+cp .env.example .env   # 編輯 .env，填入你自己的 TGBOT_TOKEN
+docker compose up --build
+```
+
+兩階段建置（`swift:6.2-jammy` 編譯、`swift:6.2-jammy-slim` 只跑執行檔），image 比較小；
+`docker-compose.yml` 預設 `restart: unless-stopped`，process 意外結束會自動重啟。細節
+（尤其是 build context 為什麼是上一層、WORKDIR 名稱為什麼不能隨便取）見 `Example/Dockerfile`
+開頭的註解——這兩個是實際建置踩過的坑，不是憑空預防性寫的。
 
 ## 核心型別
 
