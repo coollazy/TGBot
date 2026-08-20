@@ -240,6 +240,47 @@ struct ContextBackgroundJobTests {
         #expect(apiClient.sentMessages.contains { $0.text == "reached done state" })
     }
 
+    // applyBackgroundTransition（背景任務完成觸發的轉移）跟 dispatch()（使用者傳訊息
+    // 觸發的轉移）原本是兩條分開的路徑，補 onEnter 的時候只接上了 dispatch() 那條，
+    // applyBackgroundTransition 沒接——這條測試補上這個情境：背景任務完成後轉移到的
+    // state 有註冊 onEnter，應該不用等使用者下一句話就自動顯示。
+    @Test("onComplete's .transition(to:) target state's onEnter fires automatically too, not just on the next real Update (inside)")
+    func onCompleteTransitionTriggersOnEnter() async throws {
+        enum JobState: ConversationState { case main, done }
+
+        let apiClient = RecordingAPIClient()
+        let registry = EngineRegistry()
+        let scheduler = ManualScheduler()
+        let engine = ConversationEngine(
+            stateStore: InMemoryStateStore(),
+            apiClient: apiClient,
+            scheduler: scheduler,
+            logger: Logger(label: "test"),
+            registry: registry
+        )
+
+        let scene = Scene<JobState, EmptySession>(name: "job-onenter", initial: .main)
+        scene.on(.main) { ctx in
+            ctx.startBackgroundJob(id: "t5", work: { _ in }, onComplete: { _, _, _ in
+                .transition(to: .done)
+            })
+            return .stay
+        }
+        scene.onEnter(.done) { ctx in
+            try await ctx.reply("onEnter: done automatically")
+            return .stay
+        }
+        registry.registerScene(scene, commandTrigger: "job-onenter")
+
+        await engine.dispatch(update: Update(updateID: 1, chatID: 1, text: "/job-onenter", commandName: "job-onenter"))
+        await waitUntil { await scheduler.hasPending(chatID: 1, taskID: "t5") }
+
+        await scheduler.trigger(chatID: 1, taskID: "t5", result: .success)
+        await waitUntil { apiClient.sentMessages.contains { $0.text == "onEnter: done automatically" } }
+
+        #expect(apiClient.sentMessages.contains { $0.text == "onEnter: done automatically" })
+    }
+
     @Test("onComplete's transition is NOT applied if the user already left the scene, e.g. via /cancel (outside)")
     func onCompleteTransitionSkippedWhenSceneNoLongerActive() async throws {
         enum JobState: ConversationState { case main, done }

@@ -78,6 +78,34 @@ public actor ConversationEngine: ConversationEngineHandle {
         case .moved:
             record.currentStateData = newStateData
             record.sessionData = newSessionData
+            // 跟 dispatch() 的 .moved 分支一致：轉移到的新 state 有沒有註冊 onEnter，
+            // 有的話套用它的結果（可能又轉移、又回話），不用等使用者下一句話才看到
+            // 提示。已知限制：onEnter 這裡回傳的結果如果又是 .interrupted，這條通道
+            // 不支援（跟下面既有的 .interrupted case 是同一種限制——背景任務完成觸發
+            // 的路徑不支援連續觸發新的 interrupt），安靜忽略、只記 log；stateHistory
+            // 這裡固定傳空陣列，跟既有 .interrupted 的限制一樣，這條通道本來就沒有
+            // 保留 rollback 歷史可以帶。
+            if let scene = registry.scene(named: sceneName) {
+                let dependencies = SceneDependencies(apiClient: apiClient, scheduler: scheduler, engine: self, logger: logger)
+                if let enterResult = try? await scene.enter(
+                    stateData: newStateData,
+                    sessionData: newSessionData,
+                    stateHistory: [],
+                    chatID: chatID,
+                    userID: nil,
+                    dependencies: dependencies
+                ) {
+                    switch enterResult.transition {
+                    case .moved, .stayed, .rolledBack:
+                        record.currentStateData = enterResult.newState
+                        record.sessionData = enterResult.newSession
+                    case .ended:
+                        record.reset()
+                    case .interrupted:
+                        logger.debug("applyBackgroundTransition: onEnter triggered .interrupted, not supported from this path, ignoring")
+                    }
+                }
+            }
             await stateStore.save(chatID: chatID, record)
         case .stayed, .rolledBack:
             // Context 本身沒有保存「目前的 state」（開發者在 onComplete 裡拿到的 Context 只
