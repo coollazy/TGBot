@@ -77,6 +77,18 @@ docker compose up --build
 兩階段建置（先用完整版 Swift 編譯、再換成只有 runtime 的精簡版本執行），image 比較小；
 `docker-compose.yml` 預設 `restart: unless-stopped`，process 意外結束會自動重啟。
 
+### 更複雜的範例：`/menu`
+
+`Example/` 裡除了 `/profile` 那組，還有一組獨立的 `/menu`——主選單（註冊／建立活動／設定）、
+每個子流程都是獨立的 Scene，用 `.interrupt(with:)`／`.interrupt(with:onReturn:)` 中斷帶進去。
+比 `/profile` 複雜得多，用來示範：
+
+- 每個欄位都是 `onEnter`（顯示提示）／`on`（驗證答案）乾淨拆開的寫法
+- 確認才把資料帶回主流程、取消不帶回（`.interrupt(with:onReturn:)` + 舊版 `.end`）
+- 背景任務進度用「使用者主動問才回答」（`ctx.backgroundJobStatus`），不是主動推播
+- 巢狀 `.interrupt`：設定子流程用 `AnyScene(_:initialSession:)` 把主流程現有的資料帶進去，
+  設定自己底下的顯示畫面又再帶著這份資料往下傳一層
+
 ## 核心型別
 
 ### `TGBot`
@@ -94,7 +106,11 @@ docker compose up --build
 
 - `State`：你自訂、遵循 `ConversationState` 的 enum，代表流程走到哪一步
 - `Session`：這段流程累積收集的資料（例如姓名、年齡）
-- `.on(state) { ctx in ... }` 為每個 state 註冊處理函式
+- `.on(state) { ctx in ... }` 收到使用者真的傳來的 Update 時觸發，驗證答案、決定轉移到哪
+- `.onEnter(state) { ctx in ... }`（選配）轉移進入這個 state 的當下自動觸發，不用等
+  使用者說話——用來顯示這個 state 的提示/選單，或做純判斷/計算後直接轉移下一步（回傳
+  `.stay` 才會真的停下來等使用者輸入；回傳其他情況會不等使用者、立刻連鎖處理下一個
+  transition）。沒註冊的話行為跟原本一樣，`on(state)` 直接處理進場當下那筆 Update。
 
 ### `Context<State, Session>`
 
@@ -143,3 +159,12 @@ bot 預期會有大量聊天室同時活躍、且 handler 裡有可能長時間�
 目前不支援——會安全地什麼都不做（不會 crash），但也不會如預期地接著跑下一個子流程。
 需要串起兩個子流程的話，讓 `onReturn` 先把結果存好、正常結束，等使用者下一次真的傳訊息
 過來，再由正常的 state handler 觸發下一個 `.interrupt`。
+
+### 背景任務完成觸發的轉移，`onEnter` 不能再連續觸發 `.interrupt`
+
+`ctx.startBackgroundJob(...)` 的 `onComplete` 回傳 `.transition(to:)` 時，轉移到的 state
+如果有註冊 `onEnter`，會自動觸發（不用等使用者下一句話）。但如果那個 `onEnter` 又回傳
+`.interrupt(...)`，這條路徑不支援——會安全地忽略、記一則 debug log，不會 crash。跟
+`onReturn` 不能連續觸發下一個 `.interrupt`是同一種限制：自動觸發的路徑（背景任務完成、
+子流程結束帶結果回來）都不支援連續觸發新的 interrupt，只有「使用者真的送出一則新訊息」
+這條路徑才能觸發 `.interrupt`。

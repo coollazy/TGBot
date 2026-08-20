@@ -71,13 +71,29 @@ struct EchoBotExample {
         let profile = makeProfileScene(tipsScene: tips, addressScene: address)
         bot.register(profile, trigger: .command("profile"), description: "開始填寫個人資料")
 
+        // 主選單／註冊／建立活動／設定：完全獨立於 /profile 的另一組範例，見
+        // MenuExample.swift 開頭的說明——只有主選單開放指令觸發，其餘子流程都只能被
+        // 中斷帶進去（trigger: nil）。要先建好被依賴的子流程，才能建主選單。
+        let showProfile = MenuExample.makeShowProfileScene()
+        bot.register(showProfile)
+        let showEvents = MenuExample.makeShowEventsScene()
+        bot.register(showEvents)
+        let settings = MenuExample.makeSettingsScene(showProfileScene: showProfile, showEventsScene: showEvents)
+        bot.register(settings)
+        let register = MenuExample.makeRegisterScene()
+        bot.register(register)
+        let createEvent = MenuExample.makeCreateEventScene()
+        bot.register(createEvent)
+        let mainMenu = MenuExample.makeMainMenuScene(registerScene: register, createEventScene: createEvent, settingsScene: settings)
+        bot.register(mainMenu, trigger: .command("menu"), description: "多層選單範例（註冊／建立活動／設定）")
+
         // 全域指令：取消目前流程（US-5），description 會自動同步進 Telegram 的指令選單。
         bot.onCommand("cancel", description: "取消目前進行中的流程") { ctx in
             await ctx.resetConversation()
-            try await ctx.reply("已取消，若要重新開始請再次輸入 /profile。")
+            try await ctx.reply("已取消，若要重新開始請再次輸入 /profile 或 /menu。")
         }
 
-        print("TGBot profile 範例已啟動，對機器人輸入 /profile 開始填寫個人資料。")
+        print("TGBot 範例已啟動，對機器人輸入 /profile 或 /menu 開始。")
         try await bot.run()
     }
 
