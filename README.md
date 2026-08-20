@@ -79,21 +79,46 @@ docker compose up --build
 
 ## 核心型別
 
-- **`TGBot`**：對外統一入口，組裝所有內部模組。開發者只需要 `import TGBot` 這一個 module。
-  用 `register(_:trigger:description:)` 註冊多步驟對話、`onCommand(_:handler:)` 註冊全域指令、
-  `onUnhandled(_:)` 設定沒命中任何流程時的 fallback、`onError(_:)` 接住 handler 拋出的錯誤。
-- **`Scene<State, Session>`**：一段多步驟對話流程。`State` 是你自訂、遵循 `ConversationState`
-  的 enum，代表流程走到哪一步；`Session` 是這段流程累積收集的資料（例如姓名、年齡）。
-  用 `.on(state) { ctx in ... }` 為每個 state 註冊處理函式。
-- **`Context<State, Session>`**：handler 實際拿到的參數，能讀 `ctx.text`／`ctx.callbackData`、
-  讀寫 `ctx.session`、呼叫 `ctx.reply(_:)`／`ctx.replyWithMenu(_:buttons:)` 回訊息、用
-  `ctx.startBackgroundJob(id:work:onComplete:)` 啟動不卡住對話的長任務、用
-  `ctx.backgroundJobStatus(id:)` 查詢任務進度。
-- **`Transition<State>`**：handler 的回傳值，決定流程接下來怎麼走——`.transition(to:)` 前進到
-  下一步、`.stay` 留在原地（例如輸入驗證失敗要求重試）、`.end` 結束整段流程。
-- **`InlineButton`**：`replyWithMenu(_:buttons:)` 用的按鈕，使用者點擊後 `ctx.callbackData`
-  會直接拿到你設定的 `callbackData`，不需要自己比對是哪個按鈕被按下。框架也會自動處理
-  Telegram 規定的 `answerCallbackQuery` 確認、以及把點過的舊按鈕自動失效，開發者不用管這些細節。
+### `TGBot`
+
+對外統一入口，組裝所有內部模組。開發者只需要 `import TGBot` 這一個 module。
+
+- `register(_:trigger:description:)` 註冊多步驟對話
+- `onCommand(_:handler:)` 註冊全域指令
+- `onUnhandled(_:)` 設定沒命中任何流程時的 fallback
+- `onError(_:)` 接住 handler 拋出的錯誤
+
+### `Scene<State, Session>`
+
+一段多步驟對話流程。
+
+- `State`：你自訂、遵循 `ConversationState` 的 enum，代表流程走到哪一步
+- `Session`：這段流程累積收集的資料（例如姓名、年齡）
+- `.on(state) { ctx in ... }` 為每個 state 註冊處理函式
+
+### `Context<State, Session>`
+
+handler 實際拿到的參數。
+
+- `ctx.text` / `ctx.callbackData`：讀使用者的輸入
+- `ctx.session`：讀寫這段流程累積的資料
+- `ctx.reply(_:)` / `ctx.replyWithMenu(_:buttons:)`：回訊息
+- `ctx.startBackgroundJob(id:work:onComplete:)`：啟動不卡住對話的長任務
+- `ctx.backgroundJobStatus(id:)`：查詢任務進度
+
+### `Transition<State>`
+
+handler 的回傳值，決定流程接下來怎麼走。
+
+- `.transition(to:)` 前進到下一步
+- `.stay` 留在原地（例如輸入驗證失敗要求重試）
+- `.end` 結束整段流程
+
+### `InlineButton`
+
+`replyWithMenu(_:buttons:)` 用的按鈕。使用者點擊後 `ctx.callbackData` 會直接拿到你設定的
+`callbackData`，不需要自己比對是哪個按鈕被按下。框架也會自動處理 Telegram 規定的
+`answerCallbackQuery` 確認、以及把點過的舊按鈕自動失效，開發者不用管這些細節。
 
 ## 測試你自己的對話流程
 
