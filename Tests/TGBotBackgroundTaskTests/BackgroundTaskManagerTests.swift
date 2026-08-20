@@ -79,6 +79,32 @@ struct BackgroundTaskManagerTests {
         await canFinish.release()
     }
 
+    // 之前 statuses 是一份「快照」，只在任務開始（空字串）跟結束（最後一次
+    // progress.lastMessage）各寫一次，中途呼叫 progress.update(...) 完全不會反映到
+    // status() 的回傳值——只有拿真正會執行一段時間、途中多次回報進度的任務才測得出來
+    // （之前的測試都是任務一啟動就立刻完成，剛好繞過了這個問題）。這裡故意讓任務卡住
+    // 在「回報過一次進度之後」，驗證這個時間點查詢真的拿得到那次進度，不是空字串。
+    @Test("status() reflects progress.update(...) called mid-flight, not just the initial empty snapshot (inside: real bug found via live testing)")
+    func statusReflectsMidFlightProgress() async {
+        let manager = BackgroundTaskManager()
+        let canFinish = AsyncBarrier()
+
+        await manager.start(chatID: 1, taskID: "job-progress", work: { progress in
+            await progress.update("halfway")
+            await canFinish.wait() // 卡在「回報過進度之後、還沒結束之前」
+        }, onComplete: { _ in })
+
+        await waitUntil {
+            let status = await manager.status(chatID: 1, taskID: "job-progress")
+            return status?.lastMessage == "halfway"
+        }
+        let inFlightStatus = await manager.status(chatID: 1, taskID: "job-progress")
+        #expect(inFlightStatus?.lastMessage == "halfway")
+        #expect(inFlightStatus?.isFinished == false)
+
+        await canFinish.release()
+    }
+
     @Test("status() for a taskID that was never started returns nil (boundary: unknown key)")
     func statusForUnknownTaskIsNil() async {
         let manager = BackgroundTaskManager()
