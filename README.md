@@ -27,15 +27,6 @@ targets: [
 還沒有正式 release tag，先用 `branch: "master"` 追蹤主線；之後有 tag 了可以換成
 `.upToNextMajor(from:)` 之類的版本鎖定寫法。
 
-如果是在這個 repo 本身底下開發、順便寫一個依賴它的 bot（例如 `Example/` 的做法），
-用本地路徑依賴會比較方便，改動 library 馬上就看得到效果，不用等 push：
-
-```swift
-dependencies: [
-    .package(path: "../TGBot")
-]
-```
-
 ## 最小上手範例
 
 完整、可執行的版本在 [`Example/`](Example)（一個真正獨立的 SwiftPM 專案，示範多步驟收集
@@ -83,10 +74,8 @@ cp .env.example .env   # 編輯 .env，填入你自己的 TGBOT_TOKEN
 docker compose up --build
 ```
 
-兩階段建置（`swift:6.2-jammy` 編譯、`swift:6.2-jammy-slim` 只跑執行檔），image 比較小；
-`docker-compose.yml` 預設 `restart: unless-stopped`，process 意外結束會自動重啟。細節
-（尤其是 build context 為什麼是上一層、WORKDIR 名稱為什麼不能隨便取）見 `Example/Dockerfile`
-開頭的註解——這兩個是實際建置踩過的坑，不是憑空預防性寫的。
+兩階段建置（先用完整版 Swift 編譯、再換成只有 runtime 的精簡版本執行），image 比較小；
+`docker-compose.yml` 預設 `restart: unless-stopped`，process 意外結束會自動重啟。
 
 ## 核心型別
 
@@ -114,61 +103,18 @@ docker compose up --build
 
 ## 已知限制
 
-### 跨聊天室真正並行處理
+### 跨聊天室的訊息會互相排隊
 
-**現況**：`ConversationEngine`（`Sources/TGBotConversation/ConversationEngine.swift`）是單一個
-actor，處理所有聊天室的事件。同一個聊天室的事件保證依序執行（正確性沒問題），但不同聊天室
-之間的 `dispatch(update:)` 呼叫是排隊處理的，不是真的同時執行——如果 A 聊天室的某次呼叫
-卡在一個很慢的操作上（例如 handler 裡呼叫了一個很慢的外部 API），B 聊天室的事件要等 A
-處理完才會開始，即使兩者完全無關。
+目前所有聊天室的訊息是依序處理的，不同聊天室之間不會真的同時執行——如果某個聊天室的
+handler 卡在一個很慢的操作上（例如呼叫了很慢的外部 API），其他聊天室的訊息要等它處理完
+才會開始，即使兩者完全無關。設計上是給「少量使用者、非高併發」的場景用的；如果你的
+bot 預期會有大量聊天室同時活躍、且 handler 裡有可能長時間卡住的操作，這點目前需要自己
+注意（例如把慢速操作丟進 `ctx.startBackgroundJob(...)`，不要讓它卡住 handler 本身）。
 
-**為什麼現在不做**：需求書第 5 節「使用規模」已經明訂 v1 是「少量使用者，非高併發場景」，
-在這個規模下，單一 actor 排隊處理實際上不太會被使用者感覺到延遲；而要做到真正的跨聊天室
-並行，工作量跟風險是這次盤點出的所有缺口裡最高的一項（見下方「以後要做的話」），權衡下來
-先不排入範圍。
+### `onReturn` 不能直接再觸發下一個子流程
 
-**以後要做的話**：核心方向是把「一個 actor 處理所有 chat」拆成「依 chatID 分派到不同 actor」，
-可能的做法包括：
-- 一個 chatID → actor 的對照表，每個聊天室第一次出現時動態建立一個新 actor（要處理
-  「多久沒有活動就可以把這個 actor 回收掉」，不然聊天室一多記憶體會一直長）
-- 或固定數量的 actor pool，用 `chatID % N` 之類的方式分派（少了動態建立/回收的複雜度，
-  但要挑一個合理的 N，也要接受同一個 pool slot 裡的不同 chatID 還是會互相排隊）
-
-不管哪種做法，都要重新檢視現在依賴「所有東西共用同一個 actor」這件事的地方，至少包括：
-`pendingCompletions`（背景任務完成回呼字典）、`chatTails`／序列化用的內部狀態如果之後有加的話，
-確保拆開之後每個 chatID 各自的資料還是正確地綁在對的 actor 上，不會互相污染。
-
-### 子流程結果傳回被中斷的流程（`onReturn` 不能再串接新的 interrupt）
-
-**現況**：`Transition.interrupt(with:)` 支援暫停目前的流程、跑一個獨立的子流程，子流程
-`.end` 之後自動恢復原本被中斷的地方繼續。子流程如果需要把收集到的資料交還給被中斷的
-流程（例如一個「收集地址」的子流程，結束後主流程要能直接讀到使用者填的地址），用
-`.interrupt(with:onReturn:)` 這個重載——子流程用 `.end(with:)` 帶著型別化的結果結束時，
-會自動呼叫 `onReturn`，開發者在裡面決定拿到結果後接下來要做什麼（存進 session、回話、
-繼續往下走一個 state、甚至再 `.end(with:)` 讓結果繼續往更上層被中斷的流程傳）。見
-`Sources/TGBotConversation/Transition.swift`、`AnyInterruptReturnHandler.swift`，
-`Example/` 的「填地址」子流程（在 `/profile` 問年齡時輸入「填地址」）是一個端對端的範例。
-
-沒有帶結果需求的子流程（例如唯讀查詢型，`Example` 的「小提示」）維持用原本的
-`.interrupt(with:)`（不帶 `onReturn`），行為完全不變。
-
-**殘留的限制**：`onReturn` 回傳的 `Transition` 裡如果又是 `.interrupt(...)`（想在拿到
-結果後立刻再岔去跑下一個子流程），不支援——會安全退化成 `.stay` 並記一則 debug log，
-不會 crash、也不會卡在半調子的狀態，但也不會如預期地串起下一個子流程。
-
-**為什麼現在不做**：這跟既有的「背景任務完成觸發 `.interrupt` 不支援」是同一種限制：
-自動觸發的路徑（子流程結束、或背景任務完成）都不支援連續觸發新的 interrupt，只有
-「使用者真的送出一則新訊息」這條路徑才能觸發 interrupt。要讓 `onReturn` 也能安全地
-再次 `.interrupt`，需要在 `onReturn` 內部拿到「目前這個（父）scene 本身」才能重新包一個
-`SuspendedScene`——但 `onReturn` 是透過 `Transition.interrupt(with:onReturn:)` 這個
-靜態方法建構的，這個時間點還沒有「目前這個 scene」的參照可以捕捉，要解決的話得改變
-`.interrupt(with:onReturn:)` 的呼叫方式（例如改成 `Scene` 的 instance method 而非
-`Transition` 的靜態方法），影響範圍比這次的核心需求（資料交還）大，先不在這次的範圍內。
-
-**現在的暫時解法**：需要在拿到子流程結果後立刻串下一個子流程的話，讓 `onReturn` 把結果
-存好、`.stay`，交給下一次使用者真的送訊息時，由正常的 `on(state)` handler 再觸發下一個
-`.interrupt`——不如「onReturn 直接串接」順手，但不需要繞道外部共享狀態。
-
-**以後要做的話**：把 `.interrupt(with:onReturn:)` 改成能拿到「目前這個 scene」參照的
-呼叫方式，讓 `onReturn` 內部也能安全建構 `SuspendedScene`，重用既有的 `.interrupted`
-處理邏輯。
+`.interrupt(with:onReturn:)` 讓子流程結束時把結果帶回中斷它的流程（見上面「核心型別」
+或 `Example` 的「填地址」示範）。但 `onReturn` 裡如果直接回傳另一個 `.interrupt(...)`，
+目前不支援——會安全地什麼都不做（不會 crash），但也不會如預期地接著跑下一個子流程。
+需要串起兩個子流程的話，讓 `onReturn` 先把結果存好、正常結束，等使用者下一次真的傳訊息
+過來，再由正常的 state handler 觸發下一個 `.interrupt`。
