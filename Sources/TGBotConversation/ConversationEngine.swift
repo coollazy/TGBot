@@ -151,19 +151,55 @@ public actor ConversationEngine: ConversationEngineHandle {
             var record = await stateStore.load(chatID: update.chatID)
             logger.debug("dispatch: chat=\(update.chatID) loaded record.activeScene=\(record.activeScene ?? "nil")")
 
-            let sceneToRun: AnyScene?
-            if let activeSceneName = record.activeScene, let scene = registry.scene(named: activeSceneName) {
-                sceneToRun = scene
-            } else if let commandName = update.commandName, let scene = registry.scene(forTrigger: commandName) {
-                sceneToRun = scene
+            var scene: AnyScene
+            var result: (
+                transition: TransitionKind,
+                newState: Data?,
+                newSession: Data,
+                newHistory: [Data],
+                suspended: SuspendedScene?,
+                interruptingScene: AnyScene?,
+                resultData: Data?
+            )
+
+            if let activeSceneName = record.activeScene, let matchedScene = registry.scene(named: activeSceneName) {
+                scene = matchedScene
+                logger.debug("dispatch: chat=\(update.chatID) running scene=\(scene.name)")
+                result = try await scene.resume(
+                    update: update,
+                    savedState: record.currentStateData,
+                    savedSession: record.sessionData,
+                    stateHistory: record.stateHistory,
+                    dependencies: dependencies
+                )
+            } else if let commandName = update.commandName, let matchedScene = registry.scene(forTrigger: commandName) {
+                scene = matchedScene
                 record.activeScene = scene.name
                 record.currentStateData = nil // 全新進入，交給 AnyScene 用 scene.initial
                 record.stateHistory = [] // 全新進入，不該帶著上一段（可能是別的 scene）的歷史
+                logger.debug("dispatch: chat=\(update.chatID) running scene=\(scene.name)")
+                // 用指令啟動這個 scene：先試 initial state 有沒有註冊 onEnter，有的話用它
+                // 顯示提示（不把觸發用的原始指令文字當成答案餵給 on(initial)）；沒有註冊
+                // 就退化成原本行為，把觸發用的 Update 直接餵給 on(initial)。
+                if let enterResult = try await scene.enter(
+                    stateData: nil,
+                    sessionData: record.sessionData,
+                    stateHistory: [],
+                    chatID: update.chatID,
+                    userID: update.userID,
+                    dependencies: dependencies
+                ) {
+                    result = enterResult
+                } else {
+                    result = try await scene.resume(
+                        update: update,
+                        savedState: nil,
+                        savedSession: record.sessionData,
+                        stateHistory: [],
+                        dependencies: dependencies
+                    )
+                }
             } else {
-                sceneToRun = nil
-            }
-
-            guard var scene = sceneToRun else {
                 logger.debug("dispatch: chat=\(update.chatID) no scene matched, unhandledHandler=\(registry.unhandledHandlerIfAny() != nil)")
                 if let unhandledHandler = registry.unhandledHandlerIfAny() {
                     try await unhandledHandler(makeGlobalContext(text: update.text, callbackData: update.callbackData))
@@ -171,30 +207,41 @@ public actor ConversationEngine: ConversationEngineHandle {
                 return
             }
 
-            // 用迴圈而非單次呼叫：.interrupted 時要「立刻」把同一筆 update 餵給剛切換進去
-            // 的新 scene 執行它自己的 initial state handler，跟頂層指令觸發 scene 進入時的
+            // 用迴圈而非單次呼叫：.moved／.rolledBack 轉移到的新 state 可能有註冊 onEnter，
+            // 不用等使用者輸入就連鎖繼續處理；.interrupted 時要「立刻」用同一筆 update（或
+            // 新 scene 的 onEnter）執行剛切換進去的新 scene，跟頂層指令觸發 scene 進入時的
             // 行為一致（進入當下就看得到第一句話，不用使用者多送一句什麼都沒意義的訊息
             // 才會有反應）。.ended 時原則上不會這樣接著跑——被恢復的流程要等使用者真的送
             // 下一句新的話才處理；唯一的例外是子流程帶著結果（.end(with:)）彈回一個有註冊
             // onReturn 的 SuspendedScene，這種情況 onReturn 本身也會回傳一個 Transition，
-            // 那個結果一樣要接著同一套邏輯繼續處理（可能又是 .transition／.end／...），
-            // 所以迴圈頂端改成先算好 result 再進 switch，而不是每輪都固定重新呼叫
-            // scene.resume(update:...)——.interrupted／onReturn 這兩種「有下一輪、但不是
-            // 來自使用者新輸入」的情況各自算出新的 result 後 continue，其餘分支照舊 return。
-            logger.debug("dispatch: chat=\(update.chatID) running scene=\(scene.name)")
-            var result = try await scene.resume(
-                update: update,
-                savedState: record.currentStateData,
-                savedSession: record.sessionData,
-                stateHistory: record.stateHistory,
-                dependencies: dependencies
-            )
-
+            // 那個結果一樣要接著同一套邏輯繼續處理（可能又是 .transition／.end／...，也
+            // 可能因此又連鎖觸發 onEnter）。
             while true {
                 logger.debug("dispatch: chat=\(update.chatID) scene=\(scene.name) transition=\(result.transition)")
 
                 switch result.transition {
-                case .moved, .stayed, .rolledBack:
+                case .moved, .rolledBack:
+                    // 轉移到的新 state 有沒有註冊 onEnter：有的話不等使用者，立刻用它的
+                    // 結果繼續處理（可能又轉移、又連鎖下一個 onEnter）；沒有就照原本方式
+                    // 存檔，等下一輪真正的使用者輸入才交給 on(state) 處理。
+                    if let enterResult = try await scene.enter(
+                        stateData: result.newState,
+                        sessionData: result.newSession,
+                        stateHistory: result.newHistory,
+                        chatID: update.chatID,
+                        userID: update.userID,
+                        dependencies: dependencies
+                    ) {
+                        result = enterResult
+                        continue
+                    }
+                    record.activeScene = scene.name
+                    record.currentStateData = result.newState
+                    record.sessionData = result.newSession
+                    record.stateHistory = result.newHistory
+                    await stateStore.save(chatID: update.chatID, record)
+                    return
+                case .stayed:
                     record.activeScene = scene.name
                     record.currentStateData = result.newState
                     record.sessionData = result.newSession
@@ -261,18 +308,35 @@ public actor ConversationEngine: ConversationEngineHandle {
                     record.sceneStack.append(suspended)
                     record.activeScene = interruptingScene.name
                     record.currentStateData = nil // 新流程從自己的 initial 開始
-                    record.sessionData = Data()
+                    // 父流程用 AnyScene(childScene, initialSession:) 有帶初始資料進來的話
+                    // 用那份，沒有就是原本的行為（空資料，AnyScene 內部會退化成
+                    // scene.initialSession）。見 AnyScene.initialSessionOverride 的說明。
+                    record.sessionData = interruptingScene.initialSessionOverride ?? Data()
                     record.stateHistory = []
                     scene = interruptingScene
-                    // 不 return、不存檔——立刻用同一筆 update 跑新 scene，繼續迴圈；
-                    // 存檔會在新 scene 這一輪真正處理完（.moved／.stayed／.ended／...）時才做。
-                    result = try await scene.resume(
-                        update: update,
-                        savedState: nil,
-                        savedSession: Data(),
+                    // 不 return、不存檔——立刻用同一筆 update（或新 scene 的 onEnter）跑
+                    // 新 scene，繼續迴圈；存檔會在新 scene 這一輪真正處理完
+                    // （.moved／.stayed／.ended／...）時才做。跟頂層指令 bootstrap 同一套
+                    // 邏輯：先試 initial state 有沒有註冊 onEnter，沒有才用觸發用的 Update
+                    // 直接跑 on(initial)。
+                    if let enterResult = try await scene.enter(
+                        stateData: nil,
+                        sessionData: record.sessionData,
                         stateHistory: [],
+                        chatID: update.chatID,
+                        userID: update.userID,
                         dependencies: dependencies
-                    )
+                    ) {
+                        result = enterResult
+                    } else {
+                        result = try await scene.resume(
+                            update: update,
+                            savedState: nil,
+                            savedSession: record.sessionData,
+                            stateHistory: [],
+                            dependencies: dependencies
+                        )
+                    }
                 }
             }
         } catch {
