@@ -48,7 +48,13 @@ public final class TGBot: @unchecked Sendable {
         )
     }
 
-    /// 註冊一個 scene，trigger 決定何時進入（bootstrapping）。見架構設計文件第 9 節。
+    /// 註冊一個 scene。trigger 決定要不要開放使用者直接用指令進入（bootstrapping，
+    /// 見架構設計文件第 9 節）——`nil` 代表這個 scene 只打算被別的 scene 用
+    /// `Transition.interrupt(with:)` 中斷帶進來，不開放使用者自己打指令啟動（例如
+    /// 一個「填地址」的子流程，通常不需要讓使用者能繞過主流程直接打 `/address` 進來）。
+    /// 不管有沒有給 trigger，scene 都會被正確註冊、能被中斷帶進來使用；
+    /// 只有給了 trigger，才會額外開放指令觸發、才有機會同步進指令選單。
+    ///
     /// 同步呼叫（不需要 await）：寫進的是鎖保護的 EngineRegistry，不經過 actor，
     /// 保證在 run() 開始輪詢前一定已經註冊完成。
     ///
@@ -57,9 +63,10 @@ public final class TGBot: @unchecked Sendable {
     /// 才會被同步，導致用 register(_:trigger:) 開始的流程指令（例如 /profile）
     /// 永遠不會出現在 Telegram 的「/」選單裡，即使指令本身完全能正常觸發也一樣。
     /// 這是拿 Example 實機測試才發現的落差，文件審查跟單元測試都沒抓到。
+    /// description 沒有搭配 trigger 的話會被忽略——沒有指令名稱可以掛，同步不了選單。
     public func register<State: ConversationState, Session: Codable & Sendable>(
         _ scene: Scene<State, Session>,
-        trigger: Trigger,
+        trigger: Trigger? = nil,
         description: String? = nil
     ) {
         switch trigger {
@@ -68,6 +75,8 @@ public final class TGBot: @unchecked Sendable {
             if let description {
                 commandDescriptions.append((name: name, description: description))
             }
+        case nil:
+            registry.registerScene(scene, commandTrigger: nil)
         }
     }
 

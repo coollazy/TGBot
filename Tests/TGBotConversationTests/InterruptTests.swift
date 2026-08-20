@@ -103,6 +103,33 @@ struct InterruptTests {
         ])
     }
 
+    // register(_:trigger:) 的 trigger 原本強制必填，逼著子流程 scene 就算不想開放使用者
+    // 直接打指令進入，也得掰一個用不到的指令出去，不然撐不過第一輪 dispatch 就會找不到
+    // 這個 scene（因為 registry 只有透過 registerScene(_:commandTrigger:) 才會寫進
+    // 「用名字查回 scene」那份索引，之前這份索引綁死在有沒有給 commandTrigger 上面）。
+    // 這裡驗證改成 optional 之後，完全不給 trigger 的子流程一樣能正常撐過多輪對話。
+    @Test("a sub-flow registered with no trigger (interrupt-only, never a standalone command) still survives multiple dispatch turns (boundary: nil trigger)")
+    func subFlowWithNoTriggerSurvivesMultipleTurns() async throws {
+        let apiClient = RecordingAPIClient()
+        let (engine, registry) = makeEngine(apiClient)
+        let sub = makeSubScene()
+        let main = makeMainScene(subScene: sub)
+        registry.registerScene(main, commandTrigger: "main")
+        registry.registerScene(sub, commandTrigger: nil) // 不開放指令，只能被中斷帶進來
+
+        await engine.dispatch(update: Update(updateID: 1, chatID: 1, text: "/main", commandName: "main"))
+        await engine.dispatch(update: Update(updateID: 2, chatID: 1, text: "sub")) // 中斷進場，第一輪靠直接傳的物件參照，不會測到這個修復
+        // 這一輪才是關鍵：sub 上一輪存進 record 的只有名字字串，這裡要真的能靠
+        // registry.scene(named:) 查回來，不能因為沒給 trigger 就找不到
+        await engine.dispatch(update: Update(updateID: 3, chatID: 1, text: "blue"))
+
+        #expect(apiClient.sentMessages.map(\.text) == [
+            "main: /main",
+            "sub: what's your favorite color?",
+            "sub got: blue",
+        ])
+    }
+
     @Test("when the sub-flow ends, the interrupted main flow automatically resumes where it paused (inside)")
     func subFlowEndResumesMainFlow() async throws {
         let apiClient = RecordingAPIClient()

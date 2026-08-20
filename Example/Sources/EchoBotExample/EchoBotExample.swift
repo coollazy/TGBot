@@ -55,18 +55,18 @@ struct EchoBotExample {
 
         let bot = TGBot(configuration: configuration)
 
-        // 小提示子流程：填 /profile 填到一半可以用「小提示」中斷進來，也能直接用
-        // /tips 單獨啟動——中斷（Transition.interrupt）需要目標 scene 能被 registry
-        // 查得到，所以這裡也要註冊，即使實務上通常是被中斷帶進來，不是使用者自己打指令進來的。
+        // 小提示子流程：填 /profile 填到一半可以用「小提示」中斷進來，本身不開放使用者
+        // 直接打指令啟動，所以 trigger 給 nil——register(_:trigger:description:) 不管
+        // 有沒有給 trigger 都會正確註冊，讓中斷帶進來的 scene 能撐過後續每一輪對話，
+        // 不需要為了「能被中斷用」而掰一個用不到的指令出去。
         // 建一次、兩邊共用同一個實例，不要各自各建一個同名但不同物件的 scene。
         let tips = makeTipsScene()
-        bot.register(tips, trigger: .command("tips"), description: "查看這個範例的小提示")
+        bot.register(tips)
 
-        // 填地址子流程：同樣需要能被 registry 查到才能被中斷帶進來。跟 tips 不一樣的地方是
-        // 它結束時會帶著使用者填的地址回去給 /profile（見 .askGender 裡的「填地址」判斷），
-        // 不是單純的唯讀查詢。
+        // 填地址子流程：結束時會帶著使用者填的地址回去給 /profile（見 .askGender 裡的
+        // 「填地址」判斷），不是單純的唯讀查詢，但一樣不需要開放指令直接啟動。
         let address = makeAddressScene()
-        bot.register(address, trigger: .command("address"), description: "單獨測試填地址子流程")
+        bot.register(address)
 
         let profile = makeProfileScene(tipsScene: tips, addressScene: address)
         bot.register(profile, trigger: .command("profile"), description: "開始填寫個人資料")

@@ -19,15 +19,24 @@ public final class EngineRegistry: @unchecked Sendable {
 
     public init() {}
 
+    /// `commandTrigger` 是 nil 代表這個 scene 不開放使用者直接用指令進入，只能被
+    /// `Transition.interrupt(with:)` 從別的 scene 中斷帶進來——但不管有沒有指令，
+    /// scene 都一定要寫進 `scenesByName`：`ConversationEngine.dispatch` 每一輪都是
+    /// 用 `record.activeScene`（存的是名字字串）重新查回這個 scene 物件，不是一直
+    /// 握著同一份參照，沒有這筆紀錄的話，中斷帶進來的 scene 撐過第一輪之後就會直接
+    /// 找不到，被誤判成沒有命中任何流程。這是原本 `trigger` 強制必填時，實際拿
+    /// 「只想被中斷、不想開放指令」的 scene 去用才踩到的耦合，見 `TGBot.register(...)`。
     public func registerScene<State: ConversationState, Session: Codable & Sendable>(
         _ scene: Scene<State, Session>,
-        commandTrigger: String
+        commandTrigger: String?
     ) {
         let erased = AnyScene(scene)
         lock.lock()
         defer { lock.unlock() }
         scenesByName[scene.name] = erased
-        sceneTriggers[commandTrigger] = erased
+        if let commandTrigger {
+            sceneTriggers[commandTrigger] = erased
+        }
     }
 
     public func registerCommand(_ name: String, handler: @escaping @Sendable (GlobalContext) async throws -> Void) {

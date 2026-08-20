@@ -71,6 +71,21 @@ struct EngineRegistryTests {
         #expect(registry.scene(forTrigger: "demo") == nil)
     }
 
+    // register(_:trigger:) 的 trigger 原本強制必填，逼著「只想被 .interrupt(with:) 中斷
+    // 帶進來、不開放使用者直接打指令」的 scene（例如子流程）也要掰一個用不到的指令出去，
+    // 不然 scenesByName 沒寫入、撐不過第一輪之後的 dispatch 就會找不到這個 scene。
+    // 改成 optional 之後，這裡驗證「沒給 trigger」還是會正確寫進 scenesByName，只是
+    // 不會出現在任何指令查詢裡。
+    @Test("registerScene with commandTrigger: nil is findable by name but bootstraps no command (inside)")
+    func registerSceneWithNilTriggerHasNoCommandEntry() {
+        let registry = EngineRegistry()
+        let scene = Scene<State, EmptySession>(name: "sub-only", initial: .only)
+        registry.registerScene(scene, commandTrigger: nil)
+
+        #expect(registry.scene(named: "sub-only") != nil)
+        #expect(registry.scene(forTrigger: "sub-only") == nil)
+    }
+
     @Test("commandHandler(for:) / unhandledHandlerIfAny return nil before anything is registered (boundary: empty registry)")
     func emptyRegistryReturnsNil() {
         let registry = EngineRegistry()
