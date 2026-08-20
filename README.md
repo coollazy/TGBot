@@ -66,7 +66,7 @@ swift run
 ### 用 Docker 跑 Example
 
 `Example/` 底下有 `Dockerfile`／`docker-compose.yml`／`.env.example`，可以直接打包成
-image 丟到 Linux 上跑（例如驗證長時間輪詢的穩定度，而不是只在本機跑幾分鐘）：
+image 丟到 Linux 上跑：
 
 ```bash
 cd Example
