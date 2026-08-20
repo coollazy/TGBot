@@ -5,9 +5,6 @@
 什麼、該怎麼往下走，剩下的（使用者現在在哪一步、按鈕點擊怎麼接回對話流程）交給
 TGBot 處理。
 
-完整需求與設計脈絡見 [`Docs/TGBot-需求書.html`](Docs/TGBot-需求書.html) 與
-[`Docs/TGBot-架構設計.html`](Docs/TGBot-架構設計.html)。
-
 ## 安裝
 
 Repo 在 [github.com/coollazy/TGBot](https://github.com/coollazy/TGBot)，用一般的 URL 依賴：
