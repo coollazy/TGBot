@@ -114,7 +114,11 @@ enum MenuExample {
         var gender: String?
     }
 
-    static func makeRegisterScene() -> Scene<RegisterState, RegisterSession> {
+    /// `helpScene`：純說明用的唯讀子流程，用來在 `.askGender` 示範中斷＋恢復＋rollback
+    /// 三者疊在一起的情境——填到性別這步可以打「小提示」岔出去看說明，回來後再打
+    /// 「上一步」，驗證中斷前累積的歷史（姓名、年齡兩步）真的還在，不是被中斷這件事
+    /// 本身清空了。
+    static func makeRegisterScene(helpScene: Scene<RegisterHelpState, EmptySession>) -> Scene<RegisterState, RegisterSession> {
         let scene = Scene<RegisterState, RegisterSession>(name: "menu-register", initial: .askName, initialSession: RegisterSession())
 
         scene.onEnter(.askName) { ctx in
@@ -143,23 +147,45 @@ enum MenuExample {
             return .transition(to: .askGender)
         }
 
+        // 「上一步」「小提示」都做成按鈕，不用打字——跟男/女選項放在同一則訊息，
+        // 分開兩排比較好按。
+        let askGenderButtons: [[InlineButton]] = [
+            [
+                InlineButton(text: "男", callbackData: "male"),
+                InlineButton(text: "女", callbackData: "female"),
+            ],
+            [
+                InlineButton(text: "上一步", callbackData: "back"),
+                InlineButton(text: "小提示", callbackData: "help"),
+            ],
+        ]
+
         scene.onEnter(.askGender) { ctx in
-            try await ctx.replyWithMenu(
-                "請選擇性別：",
-                buttons: [[
-                    InlineButton(text: "男", callbackData: "male"),
-                    InlineButton(text: "女", callbackData: "female"),
-                ]]
-            )
+            try await ctx.replyWithMenu("請選擇性別：", buttons: askGenderButtons)
             return .stay
         }
         scene.on(.askGender) { ctx in
-            guard let gender = ctx.callbackData, gender == "male" || gender == "female" else {
+            // 示範 #4 的修復：填到這一步時，姓名／年齡兩題的歷史已經累積了兩筆。
+            // 「小提示」中斷去跑一個純說明的子流程，回來後「上一步」應該還是能正確
+            // 退回「填年齡」——不會因為中間岔出去過，歷史就被清空、退不回去。
+            switch ctx.callbackData {
+            case "back":
+                try await ctx.reply("好，我們重新來，請再輸入一次年齡：")
+                return .rollback
+            case "help":
+                return .interrupt(with: AnyScene(helpScene))
+            case "male", "female":
+                ctx.session.gender = ctx.callbackData
+                return .transition(to: .confirm)
+            default:
                 try await ctx.reply("請點選上面的按鈕。")
                 return .stay
             }
-            ctx.session.gender = gender
-            return .transition(to: .confirm)
+        }
+        // 純中斷、沒有 onReturn（小提示不需要交回任何資料），恢復要靠 onResume 主動
+        // 重新交代現在在等什麼，不然使用者岔出去看完說明回來，會不知道要幹嘛。
+        scene.onResume(.askGender) { ctx in
+            try await ctx.replyWithMenu("好，我們繼續：請選擇性別：", buttons: askGenderButtons)
         }
 
         scene.onEnter(.confirm) { ctx in
@@ -193,6 +219,25 @@ enum MenuExample {
                 try await ctx.reply("請點選上面的按鈕。")
                 return .stay
             }
+        }
+
+        return scene
+    }
+
+    // MARK: - 註冊：小提示（純說明用的中斷子流程）
+
+    enum RegisterHelpState: ConversationState {
+        case display
+    }
+
+    /// 完全獨立、不需要任何資料，純粹展示「中斷去跑一個子流程、看完說明、自動接回
+    /// 原本的流程」——不帶結果回去（沒有 onReturn），恢復要靠 `onResume`。
+    static func makeRegisterHelpScene() -> Scene<RegisterHelpState, EmptySession> {
+        let scene = Scene<RegisterHelpState, EmptySession>(name: "menu-register-help", initial: .display)
+
+        scene.onEnter(.display) { ctx in
+            try await ctx.reply("我們只用這些資料示範多步驟表單，不會真的存到任何地方，bot 一重啟就沒了。")
+            return .end
         }
 
         return scene
