@@ -27,14 +27,31 @@ public final class PollingUpdateSource: UpdateSource, @unchecked Sendable {
     public func start(onUpdate: @escaping @Sendable (Update) async -> Void) async throws {
         let task = Task {
             var offset: Int? = nil
+            // 同一個 chat 的 update 要嚴格保序，不同 chat 之間要能真正並發——見 README
+            // 「已知限制」修復記錄。做法：每筆 update 各自丟一個 Task 處理，但同一個
+            // chatID 的 Task 鏈式串接（後面的先 await 前面那個做完）。這個字典是輪詢
+            // 迴圈自己的本地變數，只被這個單一執行緒同步讀寫（讀前一個、寫新的都在同一段
+            // 沒有 await 的程式碼裡完成），跨批次 getUpdates 也持續保留，不會有 race，
+            // 保序這件事在這裡就已經釘死，不依賴之後排程器實際執行的先後順序。
+            // 刻意不清理已完成的舊 entry：清理要在 Task 完成後、從另一個執行緒做，會替
+            // 這個目前無鎖的字典引入新的 race，不值得為了省一點記憶體冒這個險——量級上
+            // 只是「歷來出現過的 chat 數」，對長跑 bot 可接受。
+            var lastTaskByChat: [Int64: Task<Void, Never>] = [:]
             while !Task.isCancelled {
                 do {
                     let updates = try await apiClient.getUpdates(offset: offset, timeout: 25)
                     await backoff.recordSuccess()
                     for update in updates {
-                        await onUpdate(update)
+                        let previous = lastTaskByChat[update.chatID]
+                        let chatTask = Task {
+                            _ = await previous?.value
+                            await onUpdate(update)
+                        }
+                        lastTaskByChat[update.chatID] = chatTask
                         // getUpdates 的 offset 語意是「回傳這個值之後的所有 update」，
-                        // 所以要設成已處理的最大 update_id + 1，避免下次重複拿到同一筆
+                        // 所以要設成已處理的最大 update_id + 1，避免下次重複拿到同一筆。
+                        // 不再等 onUpdate 處理完才推進——處理已經丟給上面的 Task 並發跑，
+                        // 這裡只要確保下一次 getUpdates 不會重複拿到同一筆就好。
                         offset = Int(update.updateID) + 1
                     }
                 } catch {

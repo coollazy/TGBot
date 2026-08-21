@@ -2,14 +2,23 @@ import Foundation
 import TGBotTransport
 import Logging
 
-/// 每個 chat 的對話狀態透過這個 actor 序列化處理，確保同一 chat 的事件依序執行、
-/// 不同 chat 天然並發。見架構設計文件 6.4 節。
+/// 每個 chat 的對話狀態透過這個 actor 序列化處理，確保同一 chat 的事件依序執行。
+/// 見架構設計文件 6.4 節。
 ///
-/// 已知簡化（垂直切片階段，非最終設計）：目前是「一個 actor 處理所有 chat」，
-/// 這保證了同一 chat 的事件依序執行（正確性沒問題），但也讓不同 chat 的 dispatch
-/// 彼此排隊、無法真正平行，跟架構文件「跨 chat 無限並發」的目標有落差。
-/// 要做到真正的 per-chat 並發，需要把這個 actor 拆成「依 chatID 分派的多個 actor」
-/// （例如一個 actor pool，或每個 chatID 動態建立一個 actor），留待下一階段優化。
+/// 「跨聊天室的訊息會互相排隊」這個已知限制的真正根因（以及修復）在呼叫端：
+/// `PollingUpdateSource.start()` 原本是「處理完一筆 update 才處理下一筆」，不分是不是
+/// 同一個 chat；修好之後（見 PollingUpdateSourceTests 的並發／保序測試）不同 chat 已經
+/// 能真正並發呼叫 `dispatch(update:)`。
+///
+/// 曾經評估過把這個 actor 拆成「依 chatID 分派的多個 actor」（單一 actor 理論上仍有
+/// 「兩個 chat 同時各自跑長時間同步、不 await 的運算」時互相卡住的可能）——實測發現
+/// 這個拆分對這個框架沒有實際效益：`Scene.on(...)` 註冊的 handler 是純 `@Sendable
+/// async` closure，沒有綁定任何 actor isolation，呼叫它時 Swift 本來就會跳到 global
+/// executor 執行，不會被這個 actor 的 isolation 卡住——不管拆不拆，使用者 handler 裡
+/// 的同步運算本來就不會拖累別的 chat。留在單一 actor：這個 actor 自己內部僅剩的同步
+/// 工作（StateStore／EngineRegistry 存取）都很輕量，拆分只會多一層轉發的複雜度，
+/// 換不到真正的效益。見 Tests/TGBotConversationTests/CrossChatConcurrencyTests.swift
+/// 的驗證記錄。
 public actor ConversationEngine: ConversationEngineHandle {
     private let stateStore: StateStore
     private let apiClient: TelegramAPIClient

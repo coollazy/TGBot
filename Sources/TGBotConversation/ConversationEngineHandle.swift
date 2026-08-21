@@ -1,8 +1,9 @@
 import Foundation
 
 /// Context／GlobalContext 用來安全地跟對話引擎溝通的窄介面（不暴露整個引擎的內部細節）。
-/// 真正的實作是每個 chat 一個 actor，所有操作最終都會排進該 chat 自己的序列化佇列，
-/// 見架構設計文件 6.4／7.1 節。完整的引擎 dispatch 邏輯待下一階段實作，這裡先定義介面。
+/// 真正的實作（`ConversationEngine`）是單一 actor，所有操作最終都會排進同一個序列化
+/// 佇列，見架構設計文件 6.4／7.1 節，以及 `ConversationEngine.swift` 開頭關於
+/// per-chat actor 拆分為何最後沒有採用的說明。
 package protocol ConversationEngineHandle: Sendable {
     func resetConversation(chatID: Int64) async
 
