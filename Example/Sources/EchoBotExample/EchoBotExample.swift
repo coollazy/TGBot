@@ -71,6 +71,12 @@ struct EchoBotExample {
         let profile = makeProfileScene(tipsScene: tips, addressScene: address)
         bot.register(profile, trigger: .command("profile"), description: "開始填寫個人資料")
 
+        // 照片／檔案收送範例：獨立於 /profile、/menu 之外，示範 ctx.photo／ctx.document
+        // 怎麼收、ctx.downloadFile(_:) 怎麼下載內容、ctx.replyWithPhoto(_:) 怎麼用收到的
+        // file_id 直接轉發回去（不用重新上傳一次）。
+        let upload = makeUploadScene()
+        bot.register(upload, trigger: .command("upload"), description: "示範收送照片／檔案")
+
         // 主選單／註冊／建立活動／設定：完全獨立於 /profile 的另一組範例，見
         // MenuExample.swift 開頭的說明——只有主選單開放指令觸發，其餘子流程都只能被
         // 中斷帶進去（trigger: nil）。要先建好被依賴的子流程，才能建主選單。
@@ -138,7 +144,7 @@ struct EchoBotExample {
             try await ctx.reply("對照組（沒帶 disableWebPagePreview，照舊展開卡片）：\n" + text, parseMode: .html)
         }
 
-        print("TGBot 範例已啟動，對機器人輸入 /profile 或 /menu 開始。")
+        print("TGBot 範例已啟動，對機器人輸入 /profile、/menu 或 /upload 開始。")
         try await bot.run()
     }
 
@@ -358,6 +364,44 @@ struct EchoBotExample {
 
         scene.on(.receiveAddress) { ctx in
             return try .end(with: ctx.text ?? "")
+        }
+
+        return scene
+    }
+
+    enum UploadState: ConversationState {
+        case waitingForFile
+    }
+
+    /// 完全獨立的照片／檔案收送示範，用 /upload 直接啟動。傳一張照片或一個檔案都會被
+    /// 原樣轉發回去（示範 ctx.photo／ctx.document 的 fileID 可以直接透過 .fileID(_:)
+    /// 重用，不用自己下載再重新上傳一次）；檔案的部分額外示範真的下載內容
+    /// （ctx.downloadFile(_:)），確認拿到的 bytes 數量對不對，證明拿到的是完整檔案、
+    /// 不只是 metadata；兩者都沒傳就留在原地提醒使用者。
+    static func makeUploadScene() -> Scene<UploadState, EmptySession> {
+        let scene = Scene<UploadState, EmptySession>(name: "upload", initial: .waitingForFile)
+
+        scene.on(.waitingForFile) { ctx in
+            if let photo = ctx.photo {
+                try await ctx.reply("收到照片（\(photo.fileSize.map(String.init) ?? "未知") bytes），原樣轉發給你：")
+                // 重用使用者剛傳來的 file_id，不用自己下載內容再重新上傳一次。
+                try await ctx.replyWithPhoto(.fileID(photo.fileID))
+                return .end
+            }
+
+            if let document = ctx.document {
+                // 真的把內容下載下來，證明 ctx.downloadFile(_:) 拿到的是完整檔案，不只是
+                // metadata——實務上這裡會接著做存檔、解析內容等等，範例只做最簡單的確認。
+                let data = try await ctx.downloadFile(document)
+                try await ctx.reply("收到檔案「\(document.fileName ?? "未命名")」（\(document.mimeType ?? "未知類型")），下載到 \(data.count) bytes，轉發給你：")
+                // 這裡一樣重用 file_id 轉發，不是把剛下載的 data 重新上傳——下載那步純粹是
+                // 為了證明 downloadFile(_:) 真的拿得到內容，跟轉發用的是兩件獨立的事。
+                try await ctx.replyWithDocument(.fileID(document.fileID))
+                return .end
+            }
+
+            try await ctx.reply("請傳一張照片或一個檔案給我（也可以直接用聊天室裡的迴紋針按鈕）。")
+            return .stay
         }
 
         return scene

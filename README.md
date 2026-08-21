@@ -30,7 +30,7 @@ targets: [
 ## 最小上手範例
 
 完整、可執行的版本在 [`Example/`](Example)（一個真正獨立的 SwiftPM 專案，示範多步驟收集
-資料 + inline 按鈕 + 條件分支），這裡只列最精簡的骨架：
+資料 + inline 按鈕 + 條件分支 + 照片／檔案收送），這裡只列最精簡的骨架：
 
 ```swift
 import TGBot
@@ -89,6 +89,13 @@ docker compose up --build
 - 巢狀 `.interrupt`：設定子流程用 `AnyScene(_:initialSession:)` 把主流程現有的資料帶進去，
   設定自己底下的顯示畫面又再帶著這份資料往下傳一層
 
+### 照片／檔案收送範例：`/upload`
+
+同樣在 `Example/` 裡，`makeUploadScene()`——傳一張照片會用 `ctx.photo.fileID` 透過
+`.fileID(_:)` 原樣轉發回去（不用自己下載再重新上傳）；傳一般檔案則會示範
+`ctx.downloadFile(_:)` 真的把內容抓下來、回報下載到的 bytes 數量。對應 README 上面
+「收送照片／檔案」那段程式碼片段的完整可執行版本。
+
 ## 核心型別
 
 ### `TGBot`
@@ -117,8 +124,11 @@ docker compose up --build
 handler 實際拿到的參數。
 
 - `ctx.text` / `ctx.callbackData`：讀使用者的輸入
+- `ctx.photo` / `ctx.document`：使用者這次傳來的照片／檔案（`IncomingFile?`，沒有就是 nil）
 - `ctx.session`：讀寫這段流程累積的資料
 - `ctx.reply(_:)` / `ctx.replyWithMenu(_:buttons:)`：回訊息
+- `ctx.replyWithPhoto(_:caption:)` / `ctx.replyWithDocument(_:caption:)`：送照片／檔案
+- `ctx.downloadFile(_:)`：下載 `ctx.photo`／`ctx.document` 指到的檔案內容
 - `ctx.startBackgroundJob(id:work:onComplete:)`：啟動不卡住對話的長任務。任務執行期間
   如果使用者透過正常訊息又編輯過 session，任務完成時會保留使用者較新的那份，不會被
   任務啟動當下那份舊的 session 覆蓋（`onComplete` 決定的狀態轉移仍然照常套用，只有
@@ -138,6 +148,41 @@ handler 的回傳值，決定流程接下來怎麼走。
 `replyWithMenu(_:buttons:)` 用的按鈕。使用者點擊後 `ctx.callbackData` 會直接拿到你設定的
 `callbackData`，不需要自己比對是哪個按鈕被按下。框架也會自動處理 Telegram 規定的
 `answerCallbackQuery` 確認、以及把點過的舊按鈕自動失效，開發者不用管這些細節。
+
+### 收送照片／檔案
+
+送出的來源用 `TGFileSource` 表示，三種都支援：
+
+```swift
+.fileID("AgACAgIA...")                              // 重用 Telegram 已有的 file_id，最省流量
+.url("https://example.com/cat.png")                 // 讓 Telegram 伺服器自己去抓公開網址
+.data(pngData, filename: "cat.png", mimeType: "image/png")  // 直接上傳本地端產生的檔案內容
+```
+
+送出：
+
+```swift
+scene.on(.confirm) { ctx in
+    try await ctx.replyWithPhoto(.url("https://example.com/cat.png"), caption: "你的貓咪")
+    try await ctx.replyWithDocument(.data(pdfData, filename: "invoice.pdf", mimeType: "application/pdf"))
+    return .end
+}
+```
+
+接收：使用者傳照片／檔案時，`ctx.photo` / `ctx.document` 會是對應的 `IncomingFile?`（照片
+自動取最大尺寸那張），用 `ctx.downloadFile(_:)` 拿實際內容：
+
+```swift
+scene.on(.waitingForReceipt) { ctx in
+    guard let document = ctx.document else {
+        try await ctx.reply("請傳收據檔案")
+        return .stay
+    }
+    let data = try await ctx.downloadFile(document)
+    // data 是 Data，document.fileName／document.mimeType 可用來判斷檔案類型
+    return .end
+}
+```
 
 ## 測試你自己的對話流程
 
