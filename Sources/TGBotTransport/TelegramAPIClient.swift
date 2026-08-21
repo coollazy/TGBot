@@ -69,6 +69,10 @@ public protocol TelegramAPIClient: Sendable {
     /// 顯示選擇結果的時候，見 GlobalContext.updateOriginalMessage(_:)。
     func editMessageText(chatID: Int64, messageID: Int64, text: String) async throws
 
+    /// 帶 parse_mode 的版本，理由同 sendMessage 的 parseMode 版本。有預設實作（見下方
+    /// extension）退回不支援 parse_mode 的版本，既有的 fake 不用跟著改。
+    func editMessageText(chatID: Int64, messageID: Int64, text: String, parseMode: TGParseMode?) async throws
+
     /// 送出照片。獨立列成 requirement（而非只靠 extension）的理由跟 sendMessage 的
     /// parseMode／disableWebPagePreview 版本一樣：透過 `TelegramAPIClient` 介面型別呼叫時，
     /// 非 requirement 的 extension method 是靜態綁定，不會呼叫到 URLSessionTelegramAPIClient
@@ -76,8 +80,16 @@ public protocol TelegramAPIClient: Sendable {
     /// 預設實作直接 throw，讓既有的測試用 fake 不用跟著改（反正它們從不呼叫這兩個方法）。
     func sendPhoto(chatID: Int64, photo: TGFileSource, caption: String?) async throws
 
+    /// 帶 parse_mode 的版本，讓照片 caption 也能送 HTML/Markdown。獨立列成 requirement
+    /// 的理由跟 sendMessage 的 parseMode 版本一樣（見上方說明），有預設實作（見下方
+    /// extension）退回不支援 parse_mode 的版本，既有的 fake 不用跟著改。
+    func sendPhoto(chatID: Int64, photo: TGFileSource, caption: String?, parseMode: TGParseMode?) async throws
+
     /// 送出一般檔案，理由同 sendPhoto。
     func sendDocument(chatID: Int64, document: TGFileSource, caption: String?) async throws
+
+    /// 帶 parse_mode 的版本，理由同 sendPhoto 的 parseMode 版本。
+    func sendDocument(chatID: Int64, document: TGFileSource, caption: String?, parseMode: TGParseMode?) async throws
 
     /// 用 file_id 換取可以組出下載網址的 file_path（Telegram Bot API 的兩段式下載流程，
     /// 見 downloadFile(filePath:) 的說明）。
@@ -132,6 +144,12 @@ extension TelegramAPIClient {
         try await sendDocument(chatID: chatID, document: document, caption: nil)
     }
 
+    /// 帶 parseMode 版本的預設實作：沒有另外覆寫的型別（多半是測試用的 fake）退回
+    /// 不支援 parse_mode 的版本，parseMode 會被忽略——跟 sendMessage 那組預設實作同一個理由。
+    public func editMessageText(chatID: Int64, messageID: Int64, text: String, parseMode: TGParseMode?) async throws {
+        try await editMessageText(chatID: chatID, messageID: messageID, text: text)
+    }
+
     /// sendPhoto／sendDocument／getFile／downloadFile(filePath:) 的預設實作：沒有另外
     /// 覆寫的型別（多半是測試用的 fake）直接 throw——這幾個是全新能力，沒有「更基本版本」
     /// 可以退回，跟 sendMessage 那組預設實作（退回不支援新參數的舊版）不一樣。對只在乎
@@ -141,8 +159,19 @@ extension TelegramAPIClient {
         throw TelegramAPIError.apiError("sendPhoto is not supported by this TelegramAPIClient")
     }
 
+    /// 帶 parseMode 版本的預設實作：沒有另外覆寫的型別（多半是測試用的 fake）退回
+    /// 不支援 parse_mode 的版本，parseMode 會被忽略——跟 sendMessage 那組預設實作同一個理由。
+    public func sendPhoto(chatID: Int64, photo: TGFileSource, caption: String?, parseMode: TGParseMode?) async throws {
+        try await sendPhoto(chatID: chatID, photo: photo, caption: caption)
+    }
+
     public func sendDocument(chatID: Int64, document: TGFileSource, caption: String?) async throws {
         throw TelegramAPIError.apiError("sendDocument is not supported by this TelegramAPIClient")
+    }
+
+    /// 帶 parseMode 版本的預設實作，理由同 sendPhoto 的 parseMode 版本。
+    public func sendDocument(chatID: Int64, document: TGFileSource, caption: String?, parseMode: TGParseMode?) async throws {
+        try await sendDocument(chatID: chatID, document: document, caption: caption)
     }
 
     public func getFile(fileID: String) async throws -> String {
@@ -309,14 +338,20 @@ public final class URLSessionTelegramAPIClient: TelegramAPIClient, @unchecked Se
     }
 
     public func editMessageText(chatID: Int64, messageID: Int64, text: String) async throws {
+        try await editMessageText(chatID: chatID, messageID: messageID, text: text, parseMode: nil)
+    }
+
+    public func editMessageText(chatID: Int64, messageID: Int64, text: String, parseMode: TGParseMode?) async throws {
         struct Body: Encodable {
             let chatID: Int64
             let messageID: Int64
             let text: String
+            let parseMode: String?
             enum CodingKeys: String, CodingKey {
                 case chatID = "chat_id"
                 case messageID = "message_id"
                 case text
+                case parseMode = "parse_mode"
             }
         }
         // 故意不帶 reply_markup：editMessageText 沒帶這個欄位時，Telegram 不會動原本的
@@ -325,33 +360,39 @@ public final class URLSessionTelegramAPIClient: TelegramAPIClient, @unchecked Se
         // keyboard 了，不用特別再處理一次。
         _ = try await post(
             path: "editMessageText",
-            body: Body(chatID: chatID, messageID: messageID, text: text),
+            body: Body(chatID: chatID, messageID: messageID, text: text, parseMode: parseMode?.rawValue),
             responseType: TGMessage.self
         )
     }
 
     public func sendPhoto(chatID: Int64, photo: TGFileSource, caption: String?) async throws {
+        try await sendPhoto(chatID: chatID, photo: photo, caption: caption, parseMode: nil)
+    }
+
+    public func sendPhoto(chatID: Int64, photo: TGFileSource, caption: String?, parseMode: TGParseMode?) async throws {
         switch photo {
         case .fileID(let value), .url(let value):
             struct Body: Encodable {
                 let chatID: Int64
                 let photo: String
                 let caption: String?
+                let parseMode: String?
                 enum CodingKeys: String, CodingKey {
                     case chatID = "chat_id"
                     case photo
                     case caption
+                    case parseMode = "parse_mode"
                 }
             }
             _ = try await post(
                 path: "sendPhoto",
-                body: Body(chatID: chatID, photo: value, caption: caption),
+                body: Body(chatID: chatID, photo: value, caption: caption, parseMode: parseMode?.rawValue),
                 responseType: TGMessage.self
             )
         case .data(let data, let filename, let mimeType):
             _ = try await postMultipart(
                 path: "sendPhoto",
-                fields: ["chat_id": String(chatID), "caption": caption].compactMapValues { $0 },
+                fields: ["chat_id": String(chatID), "caption": caption, "parse_mode": parseMode?.rawValue].compactMapValues { $0 },
                 fileField: "photo",
                 filename: filename,
                 mimeType: mimeType,
@@ -362,27 +403,33 @@ public final class URLSessionTelegramAPIClient: TelegramAPIClient, @unchecked Se
     }
 
     public func sendDocument(chatID: Int64, document: TGFileSource, caption: String?) async throws {
+        try await sendDocument(chatID: chatID, document: document, caption: caption, parseMode: nil)
+    }
+
+    public func sendDocument(chatID: Int64, document: TGFileSource, caption: String?, parseMode: TGParseMode?) async throws {
         switch document {
         case .fileID(let value), .url(let value):
             struct Body: Encodable {
                 let chatID: Int64
                 let document: String
                 let caption: String?
+                let parseMode: String?
                 enum CodingKeys: String, CodingKey {
                     case chatID = "chat_id"
                     case document
                     case caption
+                    case parseMode = "parse_mode"
                 }
             }
             _ = try await post(
                 path: "sendDocument",
-                body: Body(chatID: chatID, document: value, caption: caption),
+                body: Body(chatID: chatID, document: value, caption: caption, parseMode: parseMode?.rawValue),
                 responseType: TGMessage.self
             )
         case .data(let data, let filename, let mimeType):
             _ = try await postMultipart(
                 path: "sendDocument",
-                fields: ["chat_id": String(chatID), "caption": caption].compactMapValues { $0 },
+                fields: ["chat_id": String(chatID), "caption": caption, "parse_mode": parseMode?.rawValue].compactMapValues { $0 },
                 fileField: "document",
                 filename: filename,
                 mimeType: mimeType,

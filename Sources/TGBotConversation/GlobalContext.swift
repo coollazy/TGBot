@@ -57,12 +57,12 @@ public class GlobalContext: @unchecked Sendable {
         try await apiClient.sendMessage(chatID: chatID, text: text, inlineKeyboard: rows, parseMode: parseMode, disableWebPagePreview: disableWebPagePreview)
     }
 
-    public func replyWithPhoto(_ source: TGFileSource, caption: String? = nil) async throws {
-        try await apiClient.sendPhoto(chatID: chatID, photo: source, caption: caption)
+    public func replyWithPhoto(_ source: TGFileSource, caption: String? = nil, parseMode: TGParseMode? = nil) async throws {
+        try await apiClient.sendPhoto(chatID: chatID, photo: source, caption: caption, parseMode: parseMode)
     }
 
-    public func replyWithDocument(_ source: TGFileSource, caption: String? = nil) async throws {
-        try await apiClient.sendDocument(chatID: chatID, document: source, caption: caption)
+    public func replyWithDocument(_ source: TGFileSource, caption: String? = nil, parseMode: TGParseMode? = nil) async throws {
+        try await apiClient.sendDocument(chatID: chatID, document: source, caption: caption, parseMode: parseMode)
     }
 
     /// 下載使用者傳來的照片／檔案內容（ctx.photo／ctx.document 拿到的那個 IncomingFile）。
@@ -78,9 +78,9 @@ public class GlobalContext: @unchecked Sendable {
     ///
     /// 只有透過按鈕點擊（callback_query）觸發的 handler 才拿得到 messageID，一般文字訊息
     /// 呼叫這個方法會被忽略（沒有意義：不是「按鈕所在的訊息」）。
-    public func updateOriginalMessage(_ text: String) async throws {
+    public func updateOriginalMessage(_ text: String, parseMode: TGParseMode? = nil) async throws {
         guard let messageID else { return }
-        try await apiClient.editMessageText(chatID: chatID, messageID: messageID, text: text)
+        try await apiClient.editMessageText(chatID: chatID, messageID: messageID, text: text, parseMode: parseMode)
     }
 
     /// US-5：清空目前 chat 的 scene/state/session/歷史棧/scene 棧，回到 idle。
