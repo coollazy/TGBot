@@ -75,18 +75,24 @@ enum MenuExample {
         }
 
         scene.on(.menu) { ctx in
+            // 每個分支都先把「請選擇要做什麼：」這則選單訊息編輯成「已選擇 XXX」，
+            // 對話紀錄裡才看得出使用者點了哪一個——sendMenu(ctx) 不管是 onEnter 還是
+            // onResume 觸發都送出同一份文字，這裡加回去的字首才會對得上。
             switch ctx.callbackData {
             case "register":
+                try await ctx.updateOriginalMessage("請選擇要做什麼：已選擇「註冊」")
                 return .interrupt(with: AnyScene(registerScene)) { (profile: RegisteredProfile, ctx: Context<MainMenuState, MainMenuSession>) in
                     ctx.session.profile = profile
                     return .transition(to: .menu)
                 }
             case "create_event":
+                try await ctx.updateOriginalMessage("請選擇要做什麼：已選擇「建立活動」")
                 return .interrupt(with: AnyScene(createEventScene)) { (events: [Event], ctx: Context<MainMenuState, MainMenuSession>) in
                     ctx.session.events.append(contentsOf: events)
                     return .transition(to: .menu)
                 }
             case "settings":
+                try await ctx.updateOriginalMessage("請選擇要做什麼：已選擇「設定」")
                 // 純唯讀查詢，不需要子流程回傳任何東西，但需要把現有資料「帶進去」——
                 // 這就是 AnyScene(_:initialSession:) 存在的理由。
                 return .interrupt(with: AnyScene(
@@ -168,13 +174,21 @@ enum MenuExample {
             // 示範 #4 的修復：填到這一步時，姓名／年齡兩題的歷史已經累積了兩筆。
             // 「小提示」中斷去跑一個純說明的子流程，回來後「上一步」應該還是能正確
             // 退回「填年齡」——不會因為中間岔出去過，歷史就被清空、退不回去。
+            //
+            // 這一步 onEnter／onResume 送出的文字不一樣（「請選擇性別：」vs.「好，我們
+            // 繼續：請選擇性別：」），這裡就不重組完整字首，只送一句獨立的「已選擇 XXX」，
+            // 避免兩種情況下字首對不上。
             switch ctx.callbackData {
             case "back":
+                try await ctx.updateOriginalMessage("已選擇「上一步」↩️")
                 try await ctx.reply("好，我們重新來，請再輸入一次年齡：")
                 return .rollback
             case "help":
+                try await ctx.updateOriginalMessage("已選擇「小提示」💡")
                 return .interrupt(with: AnyScene(helpScene))
             case "male", "female":
+                let genderLabel = ctx.callbackData == "male" ? "男" : "女"
+                try await ctx.updateOriginalMessage("已選擇「\(genderLabel)」✅")
                 ctx.session.gender = ctx.callbackData
                 return .transition(to: .confirm)
             default:
@@ -210,9 +224,20 @@ enum MenuExample {
                 guard let name = ctx.session.name, let age = ctx.session.age, let gender = ctx.session.gender else {
                     return .end
                 }
+                // 把確認畫面編輯成「已確認」，對話紀錄裡才看得出使用者當時點的是確認。
+                try await ctx.updateOriginalMessage(
+                    """
+                    請確認以下資料：
+                    姓名：\(name)
+                    年齡：\(age)
+                    性別：\(gender == "male" ? "男" : "女")
+                    已確認 ✅
+                    """
+                )
                 // 確認才帶結果出去——.end(with:) 會被主選單的 onReturn 接住。
                 return try .end(with: RegisteredProfile(name: name, age: age, gender: gender))
             case "cancel":
+                try await ctx.updateOriginalMessage("已取消，資料不會被儲存。")
                 // 沒帶結果的舊版 .end：主選單的 onReturn 不會被呼叫，profile 維持原樣不動。
                 return .end
             default:
@@ -333,10 +358,15 @@ enum MenuExample {
         }
 
         scene.on(.afterCreate) { ctx in
+            // 「活動「XXX」建立完成！」這則訊息只有 onComplete 那一處會送，剛建立的
+            // 活動一定是 createdEvents 的最後一筆，用它重組出跟原文一致的字首。
+            let createdLabel = ctx.session.createdEvents.last.map { "活動「\($0.name)」建立完成！" } ?? ""
             switch ctx.callbackData {
             case "continue_create":
+                try await ctx.updateOriginalMessage("\(createdLabel)已選擇「繼續建立」")
                 return .transition(to: .askName)
             case "back_to_main":
+                try await ctx.updateOriginalMessage("\(createdLabel)已選擇「返回主選單」")
                 return try .end(with: ctx.session.createdEvents)
             default:
                 try await ctx.reply("請點選上面的按鈕。")
@@ -392,16 +422,19 @@ enum MenuExample {
         scene.on(.menu) { ctx in
             switch ctx.callbackData {
             case "show_profile":
+                try await ctx.updateOriginalMessage("設定：已選擇「顯示註冊資訊」")
                 return .interrupt(with: AnyScene(
                     showProfileScene,
                     initialSession: ShowProfileSession(profile: ctx.session.profile)
                 ))
             case "show_events":
+                try await ctx.updateOriginalMessage("設定：已選擇「顯示所有活動」")
                 return .interrupt(with: AnyScene(
                     showEventsScene,
                     initialSession: ShowEventsSession(events: ctx.session.events, ascending: true)
                 ))
             case "back_to_main":
+                try await ctx.updateOriginalMessage("設定：已選擇「返回主選單」")
                 return .end
             default:
                 try await ctx.reply("請點選上面的按鈕。")
@@ -446,10 +479,18 @@ enum MenuExample {
         }
         scene.on(.menu) { ctx in
             switch ctx.callbackData {
-            case "name": return .transition(to: .showName)
-            case "age": return .transition(to: .showAge)
-            case "gender": return .transition(to: .showGender)
-            case "back": return .end
+            case "name":
+                try await ctx.updateOriginalMessage("想看哪一項？已選擇「姓名」")
+                return .transition(to: .showName)
+            case "age":
+                try await ctx.updateOriginalMessage("想看哪一項？已選擇「年齡」")
+                return .transition(to: .showAge)
+            case "gender":
+                try await ctx.updateOriginalMessage("想看哪一項？已選擇「性別」")
+                return .transition(to: .showGender)
+            case "back":
+                try await ctx.updateOriginalMessage("想看哪一項？已選擇「返回設定」")
+                return .end
             default:
                 try await ctx.reply("請點選上面的按鈕。")
                 return .stay
@@ -471,14 +512,24 @@ enum MenuExample {
             try await ctx.replyWithMenu(text, buttons: [[InlineButton(text: "返回", callbackData: "back")]])
             return .stay
         }
-        // 三個顯示 state 都用同一招：轉移回 .menu，讓 onEnter(.menu) 自動重新顯示選單，
-        // 不用各自手動回話一次。
-        let backToMenu: @Sendable (Context<ShowProfileState, ShowProfileSession>) async throws -> Transition<ShowProfileState> = { _ in
-            .transition(to: .menu)
+        // 三個顯示 state 各自轉移回 .menu，讓 onEnter(.menu) 自動重新顯示選單，不用
+        // 各自手動回話一次——但按鈕只有「返回」一個，還是要各自把自己那則訊息編輯成
+        // 「已選擇「返回」」，不能共用同一個 handler（不然不知道要編輯哪一種文字）。
+        scene.on(.showName) { ctx in
+            let text = ctx.session.profile.map { "姓名：\($0.name)" } ?? "尚未註冊。"
+            try await ctx.updateOriginalMessage("\(text)\n已選擇「返回」")
+            return .transition(to: .menu)
         }
-        scene.on(.showName, handler: backToMenu)
-        scene.on(.showAge, handler: backToMenu)
-        scene.on(.showGender, handler: backToMenu)
+        scene.on(.showAge) { ctx in
+            let text = ctx.session.profile.map { "年齡：\($0.age)" } ?? "尚未註冊。"
+            try await ctx.updateOriginalMessage("\(text)\n已選擇「返回」")
+            return .transition(to: .menu)
+        }
+        scene.on(.showGender) { ctx in
+            let text = ctx.session.profile.map { "性別：\($0.gender == "male" ? "男" : "女")" } ?? "尚未註冊。"
+            try await ctx.updateOriginalMessage("\(text)\n已選擇「返回」")
+            return .transition(to: .menu)
+        }
 
         return scene
     }
@@ -501,13 +552,19 @@ enum MenuExample {
             initialSession: ShowEventsSession(events: [], ascending: true)
         )
 
-        scene.onEnter(.display) { ctx in
+        // 抽成 helper：onEnter 渲染畫面、on(.display) 編輯回原本畫面時都要組同一份
+        // 「正序/逆序顯示活動：...列表..」文字，避免三個地方各自組一次、字漏改到某一處。
+        @Sendable func eventsListText(ctx: Context<ShowEventsState, ShowEventsSession>) -> String {
             let ordered = ctx.session.ascending ? ctx.session.events : Array(ctx.session.events.reversed())
             let list = ordered.isEmpty
                 ? "目前還沒有建立任何活動。"
                 : ordered.enumerated().map { "\($0.offset + 1). \($0.element.name)" }.joined(separator: "\n")
+            return "\(ctx.session.ascending ? "正序" : "逆序")顯示活動：\n\(list)"
+        }
+
+        scene.onEnter(.display) { ctx in
             try await ctx.replyWithMenu(
-                "\(ctx.session.ascending ? "正序" : "逆序")顯示活動：\n\(list)",
+                eventsListText(ctx: ctx),
                 buttons: [[
                     InlineButton(text: ctx.session.ascending ? "改成逆序" : "改成正序", callbackData: "toggle"),
                     InlineButton(text: "返回", callbackData: "back"),
@@ -518,10 +575,13 @@ enum MenuExample {
         scene.on(.display) { ctx in
             switch ctx.callbackData {
             case "toggle":
+                let orderLabel = ctx.session.ascending ? "改成逆序" : "改成正序"
+                try await ctx.updateOriginalMessage("\(eventsListText(ctx: ctx))\n已選擇「\(orderLabel)」")
                 // 轉移到「自己」逼 onEnter 重新渲染，不用在這裡手動重新回話一次。
                 ctx.session.ascending.toggle()
                 return .transition(to: .display)
             case "back":
+                try await ctx.updateOriginalMessage("\(eventsListText(ctx: ctx))\n已選擇「返回」")
                 return .end
             default:
                 try await ctx.reply("請點選上面的按鈕。")

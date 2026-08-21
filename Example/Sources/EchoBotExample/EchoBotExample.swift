@@ -148,6 +148,24 @@ struct EchoBotExample {
         try await bot.run()
     }
 
+    /// 問年齡時附上的三個捷徑按鈕（上一步／小提示／填地址）——年齡本身還是要打字輸入
+    /// 數字，這三個是原本設計成打字指令（「上一步」／「小提示」／「填地址」）的岔路，
+    /// 改成按鈕點選比較不會被使用者忘記怎麼打。這組按鈕會在三個地方重複用到（剛問年齡、
+    /// 從小提示子流程回來、從填地址子流程回來），所以抽成一個共用的 helper。
+    static var ageStepShortcutButtons: [[InlineButton]] {
+        [[
+            InlineButton(text: "上一步", callbackData: "rollback"),
+            InlineButton(text: "小提示", callbackData: "tips"),
+            InlineButton(text: "填地址", callbackData: "address"),
+        ]]
+    }
+
+    /// 問年齡那則訊息的文字，跟 ageStepShortcutButtons 一樣要在三個地方重複用到
+    /// （剛問年齡、編輯回「已選擇」、從子流程回來重問）,抽成 helper 避免打錯字漏改到某一處。
+    static func askAgePrompt(name: String?) -> String {
+        "\(name ?? "你")幾歲呢？請直接輸入數字，或點選下面的按鈕："
+    }
+
     /// 每個 state 的 handler 處理的是「回答了什麼東西才進到這個 state」，
     /// 再問下一個問題、轉移到下一個 state——例如 .askAge 的 handler 收到的
     /// ctx.text 其實是使用者對「你叫什麼名字？」的回答（名字），不是年齡；
@@ -167,15 +185,22 @@ struct EchoBotExample {
         scene.on(.askAge) { ctx in
             // 上一步問的是名字，這裡收到的就是名字
             ctx.session.name = ctx.text
-            try await ctx.reply("\(ctx.session.name ?? "你")幾歲呢？請輸入數字（也可以輸入「上一步」回去重新輸入名字、「小提示」查看提示、「填地址」先去填地址）。")
+            try await ctx.replyWithMenu(askAgePrompt(name: ctx.session.name), buttons: ageStepShortcutButtons)
             return .transition(to: .askGender)
         }
 
         scene.on(.askGender) { ctx in
             // 示範 US-2：Transition.rollback 現在真的會退回歷史棧記錄的「上一步」
-            // （這裡是問名字、順便問年齡的那個 state），不是原地不動——輸入「上一步」
+            // （這裡是問名字、順便問年齡的那個 state），不是原地不動——點「上一步」
             // 就能重新輸入名字，年齡會用你重新輸入名字之後、下一次被問到時再填。
-            if ctx.text == "上一步" {
+            // 同時保留打字「上一步」也能觸發，不強迫使用者一定要點按鈕。
+            if ctx.text == "上一步" || ctx.callbackData == "rollback" {
+                // 只有真的是點按鈕（callbackData 有值）才編輯原本那則訊息——如果是打字
+                // 觸發的，ctx.messageID 指的是使用者自己送的那則訊息，bot 沒有權限編輯
+                // 別人送的訊息，updateOriginalMessage 硬呼叫下去只會被 Telegram 拒絕。
+                if ctx.callbackData != nil {
+                    try await ctx.updateOriginalMessage("\(askAgePrompt(name: ctx.session.name))已選擇「上一步」↩️")
+                }
                 try await ctx.reply("好，我們重新來，請再輸入一次名字：")
                 return .rollback
             }
@@ -184,7 +209,10 @@ struct EchoBotExample {
             // 自己、岔去跑一個完全獨立的子流程（小提示），跟填資料本身無關，不需要子流程
             // 回傳任何資料；子流程結束後會自動接回這裡繼續問年齡，不是重新開始整個
             // /profile。之前這裡直接 fatalError，完全沒實作。
-            if ctx.text == "小提示" {
+            if ctx.text == "小提示" || ctx.callbackData == "tips" {
+                if ctx.callbackData != nil {
+                    try await ctx.updateOriginalMessage("\(askAgePrompt(name: ctx.session.name))已選擇「小提示」💡")
+                }
                 return .interrupt(with: AnyScene(tipsScene))
             }
 
@@ -192,17 +220,25 @@ struct EchoBotExample {
             // 資料要交還——用 .interrupt(with:onReturn:) 帶一個型別化回調，子流程用
             // .end(with:) 結束時會自動被呼叫，拿到的 address 就是使用者在子流程裡填的
             // 地址，直接存進主流程自己的 session，不需要透過任何外部共享狀態繞過去。
-            if ctx.text == "填地址" {
+            if ctx.text == "填地址" || ctx.callbackData == "address" {
+                if ctx.callbackData != nil {
+                    try await ctx.updateOriginalMessage("\(askAgePrompt(name: ctx.session.name))已選擇「填地址」📍")
+                }
                 return .interrupt(with: AnyScene(addressScene)) { (address: String, ctx: Context<ProfileState, ProfileData>) in
                     ctx.session.address = address
-                    try await ctx.reply("已收到地址：\(address)。我們繼續填資料：\(ctx.session.name ?? "你")幾歲呢？請輸入數字。")
+                    try await ctx.replyWithMenu(
+                        "已收到地址：\(address)。我們繼續填資料：\(ctx.session.name ?? "你")幾歲呢？請輸入數字。",
+                        buttons: ageStepShortcutButtons
+                    )
                     return .stay
                 }
             }
 
-            // 上一步問的是年齡；輸入不合法就留在原地重試（對應 US-2：錯誤發生時退回重試）
+            // 上一步問的是年齡；輸入不合法就留在原地重試（對應 US-2：錯誤發生時退回重試）。
+            // 按鈕點過一次就會被拿掉（框架自動處理），但打字打錯不會影響按鈕本身，不用
+            // 每次重試都重新送一次按鈕。
             guard let text = ctx.text, let age = Int(text), age >= 0, age <= 150 else {
-                try await ctx.reply("這個年齡看起來怪怪的，請輸入一個 0～150 之間的數字，或輸入「上一步」重新輸入名字、「小提示」查看提示、「填地址」先去填地址。")
+                try await ctx.reply("這個年齡看起來怪怪的，請輸入一個 0～150 之間的數字，或點選上面的按鈕。")
                 return .stay
             }
             ctx.session.age = age
@@ -258,6 +294,19 @@ struct EchoBotExample {
                 return .end
             }
 
+            // 跟性別選擇同一個道理：把確認畫面上的按鈕文字換成「已確認」，對話紀錄裡才
+            // 看得出使用者當時點了確認，而不是按鈕原地消失、什麼都沒交代。
+            let addressLine = ctx.session.address.map { "\n地址：\($0)" } ?? ""
+            try await ctx.updateOriginalMessage(
+                """
+                請確認以下資料：
+                姓名：\(name)
+                年齡：\(age)
+                性別：\(gender == "male" ? "男" : "女")\(addressLine)
+                已確認 ✅
+                """
+            )
+
             // 示範 US-3／US-6：把「產生總結」模擬成一個要花 5 秒的長任務，這段期間你可以
             // 正常跟 bot 說其他的話，不會被卡住；任務完成後才真的送出總結文字並結束流程——
             // 這是 Phase 2 補的功能，之前 onComplete 回傳的 transition 會被直接丟掉，
@@ -296,7 +345,13 @@ struct EchoBotExample {
         // 沒有這個 hook 的時候，岔出去再回來，下一句話只會撞上驗證失敗的訊息
         // （「這個年齡看起來怪怪的」），聽起來像使用者答錯了，但其實只是被晾在那裡而已。
         scene.onResume(.askGender) { ctx in
-            try await ctx.reply("好，我們繼續填資料：\(ctx.session.name ?? "你")幾歲呢？請輸入數字。")
+            // 從小提示子流程回來——「小提示」按鈕本身點下去時，框架已經自動把原本問年齡
+            // 那則訊息的按鈕拿掉了（見 dispatch 收到 callback_query 的處理），這裡要重新
+            // 附上按鈕，不然「上一步」「填地址」這兩條捷徑就消失了。
+            try await ctx.replyWithMenu(
+                "好，我們繼續填資料：\(ctx.session.name ?? "你")幾歲呢？請輸入數字。",
+                buttons: ageStepShortcutButtons
+            )
         }
 
         return scene
@@ -327,15 +382,24 @@ struct EchoBotExample {
         }
 
         scene.on(.detail) { ctx in
+            let question: String?
             let tip: String
             switch ctx.callbackData {
             case "why":
+                question = "為什麼要收集這些資料？"
                 tip = "這是示範 Transition.interrupt：填資料填到一半也能先岔開處理別的事，" +
                     "處理完會自動接回原本沒填完的地方繼續，不用重新開始。"
             case "usage":
+                question = "資料會怎麼被使用？"
                 tip = "這只是範例，不會真的把資料存到任何地方——bot 一重啟，資料就沒了。"
             default:
+                question = nil
                 tip = "請點選上面的按鈕。"
+            }
+            // 同樣把選單訊息換成「已選擇 XXX」，對話紀錄裡看得出點了哪一個問題；
+            // 沒點按鈕（default 分支）就沒有原始訊息可以編輯，跳過。
+            if let question {
+                try await ctx.updateOriginalMessage("小提示：想看哪一個？已選擇「\(question)」")
             }
             try await ctx.reply(tip)
             return .end
