@@ -9,6 +9,11 @@ public struct SuspendedScene: Sendable {
     public let scene: AnyScene
     public let savedState: Data
     public let savedSession: Data
+    /// 中斷當下累積的 rollback 歷史（`Transition.rollback` 要退回去的依據）。恢復時要
+    /// 原樣還原回去，不然被中斷的流程復原之後，`.rollback` 會退化成完全沒效果——中斷前
+    /// 走過的每一步都會憑空消失。預設 `[]` 是為了不動到既有呼叫點的相容性，不是「中斷
+    /// 就該清空歷史」的設計選擇。
+    public let savedStateHistory: [Data]
     /// 非 nil 代表這次中斷是用 `.interrupt(with:onReturn:)` 觸發的——子流程用
     /// `.end(with:)` 帶結果結束時，會呼叫這個 handler 把結果交回來；nil 代表舊版純中斷
     /// （或沒有註冊 onReturn），恢復時只走 `onResume` 那條路徑。
@@ -18,11 +23,13 @@ public struct SuspendedScene: Sendable {
         scene: AnyScene,
         savedState: Data,
         savedSession: Data,
+        savedStateHistory: [Data] = [],
         returnHandler: AnyInterruptReturnHandler? = nil
     ) {
         self.scene = scene
         self.savedState = savedState
         self.savedSession = savedSession
+        self.savedStateHistory = savedStateHistory
         self.returnHandler = returnHandler
     }
 }

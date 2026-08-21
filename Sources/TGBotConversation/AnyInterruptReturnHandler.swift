@@ -20,6 +20,7 @@ public struct AnyInterruptReturnHandler: Sendable {
         _ resultData: Data,
         _ parentStateData: Data,
         _ parentSessionData: Data,
+        _ parentStateHistory: [Data],
         _ parentSceneName: String,
         _ chatID: Int64,
         _ userID: Int64?,
@@ -37,7 +38,7 @@ public struct AnyInterruptReturnHandler: Sendable {
     public init<State: ConversationState, Session: Codable & Sendable, Result: Codable & Sendable>(
         _ onReturn: @escaping @Sendable (Result, Context<State, Session>) async throws -> Transition<State>
     ) {
-        self.invoke = { resultData, parentStateData, parentSessionData, parentSceneName, chatID, userID, dependencies in
+        self.invoke = { resultData, parentStateData, parentSessionData, parentStateHistory, parentSceneName, chatID, userID, dependencies in
             let decoder = JSONDecoder()
             let encoder = JSONEncoder()
 
@@ -63,22 +64,29 @@ public struct AnyInterruptReturnHandler: Sendable {
 
             let transition = try await onReturn(result, ctx)
 
+            // 跟 AnyScene.processSceneTransition 的邏輯對齊：parentStateHistory 是父流程
+            // 中斷當下真正累積的歷史（不再是寫死的空陣列），.transition／.rollback 要
+            // 照同一套規則 push／pop，不能各自為政、又把它重新歸零。
             switch transition {
             case .transition(to: let newState):
-                return (.moved, try encoder.encode(newState), try encoder.encode(ctx.session), [], nil, nil, nil)
+                let newHistory = parentStateHistory + [try encoder.encode(state)]
+                return (.moved, try encoder.encode(newState), try encoder.encode(ctx.session), newHistory, nil, nil, nil)
             case .stay:
-                return (.stayed, try encoder.encode(state), try encoder.encode(ctx.session), [], nil, nil, nil)
+                return (.stayed, try encoder.encode(state), try encoder.encode(ctx.session), parentStateHistory, nil, nil, nil)
             case .end:
                 return (.ended, nil, try encoder.encode(ctx.session), [], nil, nil, nil)
             case .endWithResult(let data):
                 return (.ended, nil, try encoder.encode(ctx.session), [], nil, nil, data)
             case .rollback:
-                // 中斷當下的 stateHistory 本來就沒有保留（見 AnyScene 既有的 .interrupt 分支
-                // 的說明），這裡自然也沒有更早的步驟可以退，統一退化成 .stay。
-                return (.stayed, try encoder.encode(state), try encoder.encode(ctx.session), [], nil, nil, nil)
+                guard let previousStateData = parentStateHistory.last else {
+                    // 沒有更早的步驟可以退——不當成錯誤，單純停在原地沒有效果，跟
+                    // processSceneTransition 的 .rollback case 是同一套規則。
+                    return (.stayed, try encoder.encode(state), try encoder.encode(ctx.session), parentStateHistory, nil, nil, nil)
+                }
+                return (.rolledBack, previousStateData, try encoder.encode(ctx.session), Array(parentStateHistory.dropLast()), nil, nil, nil)
             case .interrupt, .interruptWithReturn:
                 dependencies.logger.debug("AnyInterruptReturnHandler: onReturn 回傳 .interrupt 不支援，退化成 .stay")
-                return (.stayed, try encoder.encode(state), try encoder.encode(ctx.session), [], nil, nil, nil)
+                return (.stayed, try encoder.encode(state), try encoder.encode(ctx.session), parentStateHistory, nil, nil, nil)
             }
         }
     }

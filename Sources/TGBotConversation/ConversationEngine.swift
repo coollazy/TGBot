@@ -282,26 +282,29 @@ public actor ConversationEngine: ConversationEngineHandle {
                         await stateStore.save(chatID: update.chatID, record)
                         return
                     }
-                    // 被中斷的流程還在等——原地恢復它暫停當下的 state/session，讓下一輪
-                    // 使用者輸入直接接著原本被中斷的地方繼續跑。
-                    // 已知限制（最小版本）：暫停時的 stateHistory 沒有一起存，恢復後這個
-                    // scene 的 rollback 歷史是空的；sessionData 也不會清空以外的欄位重置，
-                    // 只還原 activeScene／currentStateData／sessionData 這三項。
+                    // 被中斷的流程還在等——原地恢復它暫停當下的 state/session/歷史棧，讓
+                    // 下一輪使用者輸入直接接著原本被中斷的地方繼續跑，.rollback 也能真的
+                    // 退回中斷前走過的步驟（不是被中斷這件事本身把歷史清空）。sessionData
+                    // 也不會清空以外的欄位重置，只還原 activeScene／currentStateData／
+                    // sessionData／stateHistory 這四項。
                     record.activeScene = suspended.scene.name
                     record.currentStateData = suspended.savedState
                     record.sessionData = suspended.savedSession
-                    record.stateHistory = []
+                    record.stateHistory = suspended.savedStateHistory
 
                     if let returnHandler = suspended.returnHandler, let resultData = result.resultData {
                         // 子流程真的用 .end(with:) 帶結果回來、父流程也真的有註冊
                         // onReturn：呼叫它，把它回傳的 Transition 當成這一輪的處理結果，
                         // 繼續同一套迴圈邏輯（onReturn 自己也可能再往下 transition、
-                        // 甚至再 .end 讓結果繼續往更上層的被中斷流程傳）。
+                        // 甚至再 .end 讓結果繼續往更上層的被中斷流程傳）。傳
+                        // suspended.savedStateHistory 進去，讓 onReturn 觸發的 transition
+                        // 也能接著中斷前的歷史繼續 push／pop，不是每次都重新歸零。
                         scene = suspended.scene
                         result = try await returnHandler.invoke(
                             resultData,
                             suspended.savedState,
                             suspended.savedSession,
+                            suspended.savedStateHistory,
                             suspended.scene.name,
                             update.chatID,
                             update.userID,

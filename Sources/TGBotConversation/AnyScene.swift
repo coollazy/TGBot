@@ -59,7 +59,8 @@ package func processSceneTransition<State: ConversationState, Session: Codable &
         let suspended = SuspendedScene(
             scene: AnyScene(scene),
             savedState: try encoder.encode(state),
-            savedSession: try encoder.encode(ctx.session)
+            savedSession: try encoder.encode(ctx.session),
+            savedStateHistory: stateHistory
         )
         return (.interrupted, nil, Data(), [], suspended, newScene, nil)
     case .interruptWithReturn(let newScene, let returnHandler):
@@ -69,6 +70,7 @@ package func processSceneTransition<State: ConversationState, Session: Codable &
             scene: AnyScene(scene),
             savedState: try encoder.encode(state),
             savedSession: try encoder.encode(ctx.session),
+            savedStateHistory: stateHistory,
             returnHandler: returnHandler
         )
         return (.interrupted, nil, Data(), [], suspended, newScene, nil)
