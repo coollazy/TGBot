@@ -171,6 +171,8 @@ public struct AnyScene: Sendable {
                 text: update.text,
                 callbackData: update.callbackData,
                 messageID: update.messageID,
+                photo: update.photo,
+                document: update.document,
                 session: session,
                 sceneName: scene.name,
                 apiClient: dependencies.apiClient,

@@ -162,6 +162,8 @@ public actor ConversationEngine: ConversationEngineHandle {
                 text: text,
                 callbackData: callbackData,
                 messageID: update.messageID,
+                photo: update.photo,
+                document: update.document,
                 apiClient: apiClient,
                 engine: self,
                 logger: logger

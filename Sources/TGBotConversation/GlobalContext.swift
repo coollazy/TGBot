@@ -1,3 +1,4 @@
+import Foundation
 import Logging
 import TGBotTransport
 
@@ -13,6 +14,10 @@ public class GlobalContext: @unchecked Sendable {
     /// updateOriginalMessage(_:) 靠它知道要編輯哪一則訊息。
     let messageID: Int64?
 
+    /// 使用者這次傳來的照片／檔案（沒有就是 nil）。開發者要下載內容用 downloadFile(_:)。
+    public let photo: IncomingFile?
+    public let document: IncomingFile?
+
     let apiClient: TelegramAPIClient
     let engine: ConversationEngineHandle
     let logger: Logger
@@ -23,6 +28,8 @@ public class GlobalContext: @unchecked Sendable {
         text: String?,
         callbackData: String?,
         messageID: Int64? = nil,
+        photo: IncomingFile? = nil,
+        document: IncomingFile? = nil,
         apiClient: TelegramAPIClient,
         engine: ConversationEngineHandle,
         logger: Logger
@@ -32,6 +39,8 @@ public class GlobalContext: @unchecked Sendable {
         self.text = text
         self.callbackData = callbackData
         self.messageID = messageID
+        self.photo = photo
+        self.document = document
         self.apiClient = apiClient
         self.engine = engine
         self.logger = logger
@@ -46,6 +55,19 @@ public class GlobalContext: @unchecked Sendable {
             row.map { TGInlineKeyboardButton(text: $0.text, callbackData: $0.callbackData) }
         }
         try await apiClient.sendMessage(chatID: chatID, text: text, inlineKeyboard: rows, parseMode: parseMode, disableWebPagePreview: disableWebPagePreview)
+    }
+
+    public func replyWithPhoto(_ source: TGFileSource, caption: String? = nil) async throws {
+        try await apiClient.sendPhoto(chatID: chatID, photo: source, caption: caption)
+    }
+
+    public func replyWithDocument(_ source: TGFileSource, caption: String? = nil) async throws {
+        try await apiClient.sendDocument(chatID: chatID, document: source, caption: caption)
+    }
+
+    /// 下載使用者傳來的照片／檔案內容（ctx.photo／ctx.document 拿到的那個 IncomingFile）。
+    public func downloadFile(_ file: IncomingFile) async throws -> Data {
+        try await apiClient.downloadFile(fileID: file.fileID)
     }
 
     /// 把「使用者剛剛點的那個按鈕所在的訊息」文字換成 text（例如把「請選擇性別：」換成
