@@ -105,6 +105,62 @@ struct URLSessionTelegramAPIClientTests {
         #expect(rows[0][0]["callback_data"] as? String == "a")
     }
 
+    @Test("sendMessage without parseMode: request body has no parse_mode key (boundary: default nil)")
+    func sendMessageWithoutParseModeOmitsKey() async throws {
+        MockURLProtocol.handler = { (_: URLRequest) in
+            (200, #"{"ok":true,"result":{"message_id":1,"chat":{"id":42},"text":"hi"}}"#.data(using: .utf8)!)
+        }
+        let client = makeClient()
+
+        try await client.sendMessage(chatID: 42, text: "hi", inlineKeyboard: nil, parseMode: nil)
+
+        let body = try #require(MockURLProtocol.capturedBody)
+        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(json["parse_mode"] == nil)
+    }
+
+    @Test("sendMessage with parseMode: HTML: request body carries parse_mode=HTML (inside)")
+    func sendMessageWithParseModeEncodesIt() async throws {
+        MockURLProtocol.handler = { (_: URLRequest) in
+            (200, #"{"ok":true,"result":{"message_id":1,"chat":{"id":42},"text":"<b>hi</b>"}}"#.data(using: .utf8)!)
+        }
+        let client = makeClient()
+
+        try await client.sendMessage(chatID: 42, text: "<b>hi</b>", inlineKeyboard: nil, parseMode: .html)
+
+        let body = try #require(MockURLProtocol.capturedBody)
+        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(json["parse_mode"] as? String == "HTML")
+    }
+
+    @Test("sendMessage with disableWebPagePreview: false (default): request body has no disable_web_page_preview key (boundary: matches Telegram's own default)")
+    func sendMessageWithoutDisableWebPagePreviewOmitsKey() async throws {
+        MockURLProtocol.handler = { (_: URLRequest) in
+            (200, #"{"ok":true,"result":{"message_id":1,"chat":{"id":42},"text":"hi"}}"#.data(using: .utf8)!)
+        }
+        let client = makeClient()
+
+        try await client.sendMessage(chatID: 42, text: "hi", inlineKeyboard: nil, parseMode: nil, disableWebPagePreview: false)
+
+        let body = try #require(MockURLProtocol.capturedBody)
+        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(json["disable_web_page_preview"] == nil)
+    }
+
+    @Test("sendMessage with disableWebPagePreview: true: request body carries disable_web_page_preview=true (inside)")
+    func sendMessageWithDisableWebPagePreviewEncodesIt() async throws {
+        MockURLProtocol.handler = { (_: URLRequest) in
+            (200, #"{"ok":true,"result":{"message_id":1,"chat":{"id":42},"text":"hi https://example.com"}}"#.data(using: .utf8)!)
+        }
+        let client = makeClient()
+
+        try await client.sendMessage(chatID: 42, text: "hi https://example.com", inlineKeyboard: nil, parseMode: nil, disableWebPagePreview: true)
+
+        let body = try #require(MockURLProtocol.capturedBody)
+        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(json["disable_web_page_preview"] as? Bool == true)
+    }
+
     @Test("sendMessage where Telegram responds ok=false: throws .apiError, not a silent success (outside)")
     func sendMessageAPIErrorThrows() async throws {
         MockURLProtocol.handler = { (_: URLRequest) in

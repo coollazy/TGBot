@@ -37,15 +37,15 @@ public class GlobalContext: @unchecked Sendable {
         self.logger = logger
     }
 
-    public func reply(_ text: String) async throws {
-        try await apiClient.sendMessage(chatID: chatID, text: text)
+    public func reply(_ text: String, parseMode: TGParseMode? = nil, disableWebPagePreview: Bool = false) async throws {
+        try await apiClient.sendMessage(chatID: chatID, text: text, inlineKeyboard: nil, parseMode: parseMode, disableWebPagePreview: disableWebPagePreview)
     }
 
-    public func replyWithMenu(_ text: String, buttons: [[InlineButton]]) async throws {
+    public func replyWithMenu(_ text: String, buttons: [[InlineButton]], parseMode: TGParseMode? = nil, disableWebPagePreview: Bool = false) async throws {
         let rows = buttons.map { row in
             row.map { TGInlineKeyboardButton(text: $0.text, callbackData: $0.callbackData) }
         }
-        try await apiClient.sendMessage(chatID: chatID, text: text, inlineKeyboard: rows)
+        try await apiClient.sendMessage(chatID: chatID, text: text, inlineKeyboard: rows, parseMode: parseMode, disableWebPagePreview: disableWebPagePreview)
     }
 
     /// 把「使用者剛剛點的那個按鈕所在的訊息」文字換成 text（例如把「請選擇性別：」換成

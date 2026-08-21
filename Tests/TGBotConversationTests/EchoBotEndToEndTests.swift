@@ -63,6 +63,53 @@ struct EchoBotEndToEndTests {
         #expect(apiClient.sentMessages[1].text == "echo: hello")
     }
 
+    @Test("ctx.reply(_:parseMode:) actually threads parseMode through to the apiClient, not silently dropped (inside)")
+    func replyWithParseModeReachesAPIClient() async throws {
+        // sendMessage(chatID:text:inlineKeyboard:parseMode:) 只有列成 protocol requirement
+        // 才能保證透過 GlobalContext 持有的 apiClient（protocol 型別）呼叫時，動態派發真的會
+        // 打到這個 fake 自己覆寫的版本，而不是 extension 那個「退回舊版、忽略 parseMode」的
+        // 預設實作。這裡故意覆寫 4 參數版本來驗證這件事：如果哪天不小心把它降級回
+        // 只有 extension 預設值，這個測試會失敗（parseMode 變成 nil）。
+        final class RecordingAPIClient: TelegramAPIClient, @unchecked Sendable {
+            private(set) var sentMessages: [(chatID: Int64, text: String, parseMode: TGParseMode?)] = []
+
+            func sendMessage(chatID: Int64, text: String, inlineKeyboard: [[TGInlineKeyboardButton]]?) async throws {
+                sentMessages.append((chatID, text, nil))
+            }
+            func sendMessage(chatID: Int64, text: String, inlineKeyboard: [[TGInlineKeyboardButton]]?, parseMode: TGParseMode?) async throws {
+                sentMessages.append((chatID, text, parseMode))
+            }
+            func getUpdates(offset: Int?, timeout: Int) async throws -> [Update] { [] }
+            func setMyCommands(_ commands: [(name: String, description: String)]) async throws {}
+            func answerCallbackQuery(callbackQueryID: String, text: String?) async throws {}
+            func editMessageReplyMarkup(chatID: Int64, messageID: Int64) async throws {}
+            func editMessageText(chatID: Int64, messageID: Int64, text: String) async throws {}
+        }
+
+        let apiClient = RecordingAPIClient()
+        let registry = EngineRegistry()
+        let engine = ConversationEngine(
+            stateStore: InMemoryStateStore(),
+            apiClient: apiClient,
+            scheduler: NoOpScheduler(),
+            logger: Logger(label: "test"),
+            registry: registry
+        )
+
+        let echo = Scene<EchoState, EmptySession>(name: "echo-html", initial: .listening)
+        echo.on(.listening) { ctx in
+            try await ctx.reply("<a href=\"https://example.com\">連結</a>", parseMode: .html)
+            return .stay
+        }
+        registry.registerScene(echo, commandTrigger: "echo-html")
+
+        await engine.dispatch(update: Update(updateID: 1, chatID: 42, text: "/echo-html", commandName: "echo-html"))
+
+        #expect(apiClient.sentMessages.count == 1)
+        #expect(apiClient.sentMessages[0].text == "<a href=\"https://example.com\">連結</a>")
+        #expect(apiClient.sentMessages[0].parseMode == .html)
+    }
+
     @Test("resetConversation clears active scene but a background job's pending completion still fires")
     func resetDoesNotCancelPendingCompletion() async throws {
         let apiClient = RecordingAPIClient()

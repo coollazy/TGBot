@@ -95,6 +95,49 @@ struct EchoBotExample {
             try await ctx.reply("已取消，若要重新開始請再次輸入 /profile 或 /menu。")
         }
 
+        // 示範 parse_mode: .html——ctx.reply(_:parseMode:) 可以送 Telegram 認得的 HTML
+        // 標籤，最常見的用途是讓連結可以直接點擊（例如公告訊息裡的 MR 連結），而不是只能
+        // 貼一整串裸網址讓使用者自己複製。同一段文字如果不帶 parseMode，Telegram 會把
+        // <a>、<b> 這些標籤原封不動當純文字顯示出來，兩則訊息放在一起最容易看出差異。
+        bot.onCommand("html", description: "示範 parse_mode: .html（可點擊連結／粗體／斜體）") { ctx in
+            let htmlText = """
+            這是一則用 <b>parse_mode: .html</b> 送出的訊息：
+            👉 <a href="https://github.com">可點擊連結</a>
+            <b>粗體</b>、<i>斜體</i>、<code>行內程式碼</code> 都吃得到。
+            """
+            try await ctx.reply(htmlText, parseMode: .html)
+
+            // 對照組：完全相同的文字但不帶 parseMode，Telegram 只會把它當純文字顯示，
+            // 標籤會直接露出來——兩則放在一起比較最直觀。
+            try await ctx.reply("對照組（不帶 parseMode，標籤會原樣顯示）：\n" + htmlText)
+        }
+
+        // 示範 parse_mode: .markdownV2——跟上面的 .html 是同一個機制，只是換一種 Telegram
+        // 認得的標記語法：*粗體*、_斜體_、`行內程式碼`、[文字](網址)。MarkdownV2 對一組保留
+        // 字元（. ! _ - 等等，用在格式標記以外的地方時）要求明確跳脫（\. 、\_），不然
+        // Telegram 會直接回 400 拒收整則訊息，錯誤訊息只會說 can't parse entities，不會告訴你
+        // 是哪個字元漏跳脫——這裡兩處都是刻意示範，不是打錯字：句號寫成 \.；而
+        // 「parse\_mode」裡的底線也得跳脫，不然會被誤判成沒配對成功的斜體標記，害外層的
+        // *粗體* 也跟著抓不到正確的結尾（本地實測到的真實錯誤：Can't find end of Bold entity）。
+        bot.onCommand("markdown", description: "示範 parse_mode: .markdownV2（粗體／斜體／連結）") { ctx in
+            let markdownText = """
+            這是一則用 *parse\\_mode: \\.markdownV2* 送出的訊息：
+            👉 [可點擊連結](https://github.com)
+            *粗體*、_斜體_、`行內程式碼` 都吃得到\\.
+            """
+            try await ctx.reply(markdownText, parseMode: .markdownV2)
+        }
+
+        // 示範 disableWebPagePreview：連結一樣可點，但不會自動展開成下面那張大預覽卡片
+        // ——訊息裡有多個連結、或連結只是附帶提及、不想讓卡片喧賓奪主的時候適用。
+        bot.onCommand("nopreview", description: "示範 disableWebPagePreview（連結可點但不展開預覽卡片）") { ctx in
+            let text = "👉 <a href=\"https://github.com\">可點擊連結</a>（這則沒有預覽卡片）"
+            try await ctx.reply(text, parseMode: .html, disableWebPagePreview: true)
+
+            // 對照組：完全相同的文字，但沒有帶 disableWebPagePreview，會照舊自動展開卡片。
+            try await ctx.reply("對照組（沒帶 disableWebPagePreview，照舊展開卡片）：\n" + text, parseMode: .html)
+        }
+
         print("TGBot 範例已啟動，對機器人輸入 /profile 或 /menu 開始。")
         try await bot.run()
     }

@@ -19,10 +19,30 @@ public struct TGInlineKeyboardButton: Sendable {
     }
 }
 
+/// sendMessage 的文字格式化模式，對應 Telegram Bot API 的 parse_mode 參數。
+/// 不帶（nil）就是純文字，跟原本行為一致。
+public enum TGParseMode: String, Sendable, Equatable {
+    case html = "HTML"
+    case markdown = "Markdown"
+    case markdownV2 = "MarkdownV2"
+}
+
 /// 對外呼叫 Telegram Bot API 的能力。一次性呼叫（如 sendMessage）依 4.1 節規則不重試，
 /// 失敗直接 throw，交由呼叫端（最終是 6.5 節的錯誤處理路徑）決定要不要通知使用者或自己重送。
 public protocol TelegramAPIClient: Sendable {
     func sendMessage(chatID: Int64, text: String, inlineKeyboard: [[TGInlineKeyboardButton]]?) async throws
+    /// 帶 parse_mode 的版本，讓 sendMessage 也能送 HTML/Markdown（例如可點擊連結）。
+    /// 獨立的 protocol requirement 而非只用 extension 預設值，是因為透過 `TelegramAPIClient`
+    /// 介面型別（例如 GlobalContext 持有的 apiClient）呼叫時，non-requirement 的 extension
+    /// method 是靜態綁定、不會呼叫到具體型別（如 URLSessionTelegramAPIClient）自己的覆寫版本
+    /// ——parse_mode 會被靜靜吃掉、永遠送不出去。獨立列成 requirement 才能確保動態派發正確。
+    /// 有預設實作（見下方 extension），既有的 fake 不用跟著改。
+    func sendMessage(chatID: Int64, text: String, inlineKeyboard: [[TGInlineKeyboardButton]]?, parseMode: TGParseMode?) async throws
+    /// 再帶 disable_web_page_preview 的版本，讓連結不要自動展開成預覽卡片（例如訊息裡
+    /// 有多個連結、或連結只是附帶提及、不想讓卡片喧賓奪主的時候）。跟 parseMode 版本
+    /// 同樣的理由獨立列成 requirement，不能只靠 extension 預設值，見上一個 requirement
+    /// 的說明——不然透過 `TelegramAPIClient` 介面型別呼叫時會永遠打到忽略這個參數的版本。
+    func sendMessage(chatID: Int64, text: String, inlineKeyboard: [[TGInlineKeyboardButton]]?, parseMode: TGParseMode?, disableWebPagePreview: Bool) async throws
     func getUpdates(offset: Int?, timeout: Int) async throws -> [Update]
     func setMyCommands(_ commands: [(name: String, description: String)]) async throws
     /// Telegram 規定收到 callback_query 後要呼叫這個確認收到，不然使用者端的按鈕會一直
@@ -46,6 +66,29 @@ extension TelegramAPIClient {
         try await sendMessage(chatID: chatID, text: text, inlineKeyboard: nil)
     }
 
+    /// 不帶按鈕、但要指定 parse_mode 的版本。
+    public func sendMessage(chatID: Int64, text: String, parseMode: TGParseMode?) async throws {
+        try await sendMessage(chatID: chatID, text: text, inlineKeyboard: nil, parseMode: parseMode)
+    }
+
+    /// 帶 parseMode 版本的預設實作：沒有另外覆寫的型別（多半是測試用的 fake）直接退回
+    /// 不支援 parse_mode 的舊版 sendMessage，parseMode 會被忽略——對只在乎「訊息有沒有送出」
+    /// 的測試來說沒有差別，真正會送出 parse_mode 的只有 URLSessionTelegramAPIClient 自己的覆寫版本。
+    public func sendMessage(chatID: Int64, text: String, inlineKeyboard: [[TGInlineKeyboardButton]]?, parseMode: TGParseMode?) async throws {
+        try await sendMessage(chatID: chatID, text: text, inlineKeyboard: inlineKeyboard)
+    }
+
+    /// 不帶按鈕、但要指定 parseMode／disableWebPagePreview 的版本。
+    public func sendMessage(chatID: Int64, text: String, parseMode: TGParseMode?, disableWebPagePreview: Bool) async throws {
+        try await sendMessage(chatID: chatID, text: text, inlineKeyboard: nil, parseMode: parseMode, disableWebPagePreview: disableWebPagePreview)
+    }
+
+    /// 帶 disableWebPagePreview 版本的預設實作：退回帶 parseMode 的版本，disableWebPagePreview
+    /// 被忽略——原因跟上面 parseMode 那個預設實作一樣，只影響沒有另外覆寫的型別（測試 fake）。
+    public func sendMessage(chatID: Int64, text: String, inlineKeyboard: [[TGInlineKeyboardButton]]?, parseMode: TGParseMode?, disableWebPagePreview: Bool) async throws {
+        try await sendMessage(chatID: chatID, text: text, inlineKeyboard: inlineKeyboard, parseMode: parseMode)
+    }
+
     /// 不帶提示文字的版本，絕大多數情況只是要「確認收到」，用這個就夠了。
     public func answerCallbackQuery(callbackQueryID: String) async throws {
         try await answerCallbackQuery(callbackQueryID: callbackQueryID, text: nil)
@@ -67,6 +110,14 @@ public final class URLSessionTelegramAPIClient: TelegramAPIClient, @unchecked Se
     }
 
     public func sendMessage(chatID: Int64, text: String, inlineKeyboard: [[TGInlineKeyboardButton]]?) async throws {
+        try await sendMessage(chatID: chatID, text: text, inlineKeyboard: inlineKeyboard, parseMode: nil)
+    }
+
+    public func sendMessage(chatID: Int64, text: String, inlineKeyboard: [[TGInlineKeyboardButton]]?, parseMode: TGParseMode?) async throws {
+        try await sendMessage(chatID: chatID, text: text, inlineKeyboard: inlineKeyboard, parseMode: parseMode, disableWebPagePreview: false)
+    }
+
+    public func sendMessage(chatID: Int64, text: String, inlineKeyboard: [[TGInlineKeyboardButton]]?, parseMode: TGParseMode?, disableWebPagePreview: Bool) async throws {
         struct InlineKeyboardButtonBody: Encodable {
             let text: String
             let callbackData: String
@@ -84,10 +135,17 @@ public final class URLSessionTelegramAPIClient: TelegramAPIClient, @unchecked Se
         struct Body: Encodable {
             let chatID: Int64
             let text: String
+            let parseMode: String?
+            // 故意用 Bool? 而不是 Bool：false 是 Telegram 的預設行為，帶 false 上去
+            // 跟完全不帶這個欄位效果一樣，索性 false 時就不編碼這個 key，跟 parseMode
+            // 為 nil 時不帶 parse_mode key 是同一種做法，body 保持最小、也方便測試斷言。
+            let disableWebPagePreview: Bool?
             let replyMarkup: ReplyMarkup?
             enum CodingKeys: String, CodingKey {
                 case chatID = "chat_id"
                 case text
+                case parseMode = "parse_mode"
+                case disableWebPagePreview = "disable_web_page_preview"
                 case replyMarkup = "reply_markup"
             }
         }
@@ -100,7 +158,13 @@ public final class URLSessionTelegramAPIClient: TelegramAPIClient, @unchecked Se
 
         _ = try await post(
             path: "sendMessage",
-            body: Body(chatID: chatID, text: text, replyMarkup: replyMarkup),
+            body: Body(
+                chatID: chatID,
+                text: text,
+                parseMode: parseMode?.rawValue,
+                disableWebPagePreview: disableWebPagePreview ? true : nil,
+                replyMarkup: replyMarkup
+            ),
             responseType: TGMessage.self
         )
     }
