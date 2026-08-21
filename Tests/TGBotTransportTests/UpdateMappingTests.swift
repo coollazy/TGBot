@@ -78,4 +78,41 @@ struct UpdateMappingTests {
         #expect(update.chatID == 0)
         #expect(update.userID == nil)
     }
+
+    @Test("message with a photo: Update.photo picks the largest size (last element), not the first (inside)")
+    func photoMappingPicksLargestSize() {
+        let small = TGPhotoSize(fileID: "small-id", fileUniqueID: "u1", width: 90, height: 90, fileSize: 1000)
+        let large = TGPhotoSize(fileID: "large-id", fileUniqueID: "u2", width: 1280, height: 1280, fileSize: 90000)
+        let message = TGMessage(messageID: 1, from: nil, chat: TGChat(id: 42), text: nil, photo: [small, large])
+        let raw = TGUpdate(updateID: 1, message: message, callbackQuery: nil)
+
+        let update = Update(from: raw)
+
+        #expect(update.photo?.fileID == "large-id")
+        #expect(update.photo?.fileSize == 90000)
+        #expect(update.document == nil)
+    }
+
+    @Test("message with a document: Update.document carries fileName/mimeType/fileSize (inside)")
+    func documentMapping() {
+        let document = TGDocument(fileID: "doc-id", fileUniqueID: "u1", fileName: "report.pdf", mimeType: "application/pdf", fileSize: 2048)
+        let message = TGMessage(messageID: 1, from: nil, chat: TGChat(id: 42), text: nil, document: document)
+        let raw = TGUpdate(updateID: 1, message: message, callbackQuery: nil)
+
+        let update = Update(from: raw)
+
+        #expect(update.document?.fileID == "doc-id")
+        #expect(update.document?.fileName == "report.pdf")
+        #expect(update.document?.mimeType == "application/pdf")
+        #expect(update.document?.fileSize == 2048)
+        #expect(update.photo == nil)
+    }
+
+    @Test("plain text message: photo/document are both nil (boundary: no attachment)")
+    func plainTextHasNoAttachments() {
+        let raw = TGUpdate(updateID: 1, message: TGMessage(messageID: 1, from: nil, chat: TGChat(id: 42), text: "hi"), callbackQuery: nil)
+        let update = Update(from: raw)
+        #expect(update.photo == nil)
+        #expect(update.document == nil)
+    }
 }

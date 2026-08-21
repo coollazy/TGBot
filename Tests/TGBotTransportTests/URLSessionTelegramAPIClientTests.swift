@@ -313,4 +313,138 @@ struct URLSessionTelegramAPIClientTests {
         #expect(json["message_id"] as? Int64 == 999)
         #expect(json["text"] as? String == "已選擇：男 ✅")
     }
+
+    @Test("sendPhoto with .fileID: request body is JSON, carries chat_id/photo/caption (inside)")
+    func sendPhotoWithFileIDEncodesJSONBody() async throws {
+        MockURLProtocol.handler = { (request: URLRequest) in
+            #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
+            return (200, #"{"ok":true,"result":{"message_id":1,"chat":{"id":42},"text":null}}"#.data(using: .utf8)!)
+        }
+        let client = makeClient()
+
+        try await client.sendPhoto(chatID: 42, photo: .fileID("ABC123"), caption: "a cat")
+
+        let body = try #require(MockURLProtocol.capturedBody)
+        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(json["chat_id"] as? Int64 == 42)
+        #expect(json["photo"] as? String == "ABC123")
+        #expect(json["caption"] as? String == "a cat")
+    }
+
+    @Test("sendPhoto with .url: request body carries the URL string in the photo field (boundary)")
+    func sendPhotoWithURLEncodesJSONBody() async throws {
+        MockURLProtocol.handler = { (_: URLRequest) in
+            (200, #"{"ok":true,"result":{"message_id":1,"chat":{"id":42},"text":null}}"#.data(using: .utf8)!)
+        }
+        let client = makeClient()
+
+        try await client.sendPhoto(chatID: 42, photo: .url("https://example.com/cat.png"))
+
+        let body = try #require(MockURLProtocol.capturedBody)
+        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(json["photo"] as? String == "https://example.com/cat.png")
+        #expect(json["caption"] == nil)
+    }
+
+    @Test("sendPhoto with .data: request is multipart/form-data, carries filename/mime type/bytes (inside)")
+    func sendPhotoWithDataEncodesMultipartBody() async throws {
+        let fileBytes = "fake-png-bytes".data(using: .utf8)!
+        MockURLProtocol.handler = { (request: URLRequest) in
+            let contentType = request.value(forHTTPHeaderField: "Content-Type") ?? ""
+            #expect(contentType.hasPrefix("multipart/form-data; boundary="))
+            return (200, #"{"ok":true,"result":{"message_id":1,"chat":{"id":42},"text":null}}"#.data(using: .utf8)!)
+        }
+        let client = makeClient()
+
+        try await client.sendPhoto(chatID: 42, photo: .data(fileBytes, filename: "cat.png", mimeType: "image/png"), caption: "a cat")
+
+        let body = try #require(MockURLProtocol.capturedBody)
+        let bodyString = String(data: body, encoding: .utf8)!
+        #expect(bodyString.contains("name=\"chat_id\""))
+        #expect(bodyString.contains("name=\"caption\""))
+        #expect(bodyString.contains("a cat"))
+        #expect(bodyString.contains("name=\"photo\"; filename=\"cat.png\""))
+        #expect(bodyString.contains("Content-Type: image/png"))
+        #expect(bodyString.contains("fake-png-bytes"))
+    }
+
+    @Test("sendDocument with .data: request is multipart/form-data under the document field name (inside)")
+    func sendDocumentWithDataEncodesMultipartBody() async throws {
+        let fileBytes = "fake-pdf-bytes".data(using: .utf8)!
+        MockURLProtocol.handler = { (_: URLRequest) in
+            (200, #"{"ok":true,"result":{"message_id":1,"chat":{"id":42},"text":null}}"#.data(using: .utf8)!)
+        }
+        let client = makeClient()
+
+        try await client.sendDocument(chatID: 42, document: .data(fileBytes, filename: "report.pdf", mimeType: "application/pdf"))
+
+        let body = try #require(MockURLProtocol.capturedBody)
+        let bodyString = String(data: body, encoding: .utf8)!
+        #expect(bodyString.contains("name=\"document\"; filename=\"report.pdf\""))
+        #expect(bodyString.contains("Content-Type: application/pdf"))
+        #expect(bodyString.contains("fake-pdf-bytes"))
+    }
+
+    @Test("getFile: request body carries file_id, result is the decoded file_path (inside)")
+    func getFileReturnsFilePath() async throws {
+        MockURLProtocol.handler = { (_: URLRequest) in
+            (200, #"{"ok":true,"result":{"file_id":"ABC123","file_unique_id":"u1","file_path":"documents/file_1.pdf"}}"#.data(using: .utf8)!)
+        }
+        let client = makeClient()
+
+        let filePath = try await client.getFile(fileID: "ABC123")
+
+        let body = try #require(MockURLProtocol.capturedBody)
+        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(json["file_id"] as? String == "ABC123")
+        #expect(filePath == "documents/file_1.pdf")
+    }
+
+    @Test("getFile where Telegram returns no file_path: throws .apiError (outside: expired file_id)")
+    func getFileWithoutFilePathThrows() async throws {
+        MockURLProtocol.handler = { (_: URLRequest) in
+            (200, #"{"ok":true,"result":{"file_id":"ABC123","file_unique_id":"u1"}}"#.data(using: .utf8)!)
+        }
+        let client = makeClient()
+
+        await #expect(throws: TelegramAPIError.self) {
+            _ = try await client.getFile(fileID: "ABC123")
+        }
+    }
+
+    @Test("downloadFile(filePath:): hits the file download domain (not the bot API domain) and returns raw bytes, not a TGResponse envelope (inside)")
+    func downloadFileFetchesRawBytesFromFileDomain() async throws {
+        let expectedBytes = "raw-file-bytes-not-json".data(using: .utf8)!
+        MockURLProtocol.handler = { (request: URLRequest) in
+            let url = request.url!.absoluteString
+            #expect(url == "https://api.telegram.org/file/botTEST_TOKEN/documents/file_1.pdf")
+            return (200, expectedBytes)
+        }
+        let client = makeClient()
+
+        let data = try await client.downloadFile(filePath: "documents/file_1.pdf")
+
+        #expect(data == expectedBytes)
+    }
+
+    @Test("downloadFile(fileID:): calls getFile then downloads using the returned file_path (inside: two-step convenience)")
+    func downloadFileByIDChainsGetFileAndDownload() async throws {
+        let expectedBytes = "raw-bytes".data(using: .utf8)!
+        var requestedPaths: [String] = []
+        MockURLProtocol.handler = { (request: URLRequest) in
+            let url = request.url!.absoluteString
+            requestedPaths.append(url)
+            if url.contains("getFile") {
+                return (200, #"{"ok":true,"result":{"file_id":"ABC123","file_unique_id":"u1","file_path":"photos/p1.jpg"}}"#.data(using: .utf8)!)
+            }
+            return (200, expectedBytes)
+        }
+        let client = makeClient()
+
+        let data = try await client.downloadFile(fileID: "ABC123")
+
+        #expect(data == expectedBytes)
+        #expect(requestedPaths.contains { $0.contains("getFile") })
+        #expect(requestedPaths.contains { $0.contains("/file/botTEST_TOKEN/photos/p1.jpg") })
+    }
 }

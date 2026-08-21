@@ -27,6 +27,16 @@ public enum TGParseMode: String, Sendable, Equatable {
     case markdownV2 = "MarkdownV2"
 }
 
+/// sendPhoto／sendDocument 要送出的檔案內容來源。三種都對應 Telegram Bot API 本身
+/// 就支援的送法：.fileID 重用已經上傳過的檔案（最省流量，例如轉發使用者剛傳來的
+/// 照片）；.url 讓 Telegram 伺服器自己去抓公開網址；.data 是真正把本地端的檔案
+/// bytes 上傳上去（沒有現成 file_id／URL 時唯一的選項），走 multipart/form-data。
+public enum TGFileSource: Sendable {
+    case fileID(String)
+    case url(String)
+    case data(Data, filename: String, mimeType: String)
+}
+
 /// 對外呼叫 Telegram Bot API 的能力。一次性呼叫（如 sendMessage）依 4.1 節規則不重試，
 /// 失敗直接 throw，交由呼叫端（最終是 6.5 節的錯誤處理路徑）決定要不要通知使用者或自己重送。
 public protocol TelegramAPIClient: Sendable {
@@ -58,6 +68,24 @@ public protocol TelegramAPIClient: Sendable {
     /// 把指定訊息的文字換成 text。用在開發者想讓「使用者剛剛點的按鈕所在的訊息」順便
     /// 顯示選擇結果的時候，見 GlobalContext.updateOriginalMessage(_:)。
     func editMessageText(chatID: Int64, messageID: Int64, text: String) async throws
+
+    /// 送出照片。獨立列成 requirement（而非只靠 extension）的理由跟 sendMessage 的
+    /// parseMode／disableWebPagePreview 版本一樣：透過 `TelegramAPIClient` 介面型別呼叫時，
+    /// 非 requirement 的 extension method 是靜態綁定，不會呼叫到 URLSessionTelegramAPIClient
+    /// 自己的覆寫版本。這裡沒有「更基本版本」可以委派（是全新能力），下方 extension 給的
+    /// 預設實作直接 throw，讓既有的測試用 fake 不用跟著改（反正它們從不呼叫這兩個方法）。
+    func sendPhoto(chatID: Int64, photo: TGFileSource, caption: String?) async throws
+
+    /// 送出一般檔案，理由同 sendPhoto。
+    func sendDocument(chatID: Int64, document: TGFileSource, caption: String?) async throws
+
+    /// 用 file_id 換取可以組出下載網址的 file_path（Telegram Bot API 的兩段式下載流程，
+    /// 見 downloadFile(filePath:) 的說明）。
+    func getFile(fileID: String) async throws -> String
+
+    /// 用 getFile 拿到的 file_path 下載檔案原始內容。這條路徑走的是另一個網域
+    /// （api.telegram.org/file/...），回應不是 TGResponse JSON envelope，是檔案本身的 bytes。
+    func downloadFile(filePath: String) async throws -> Data
 }
 
 extension TelegramAPIClient {
@@ -92,6 +120,44 @@ extension TelegramAPIClient {
     /// 不帶提示文字的版本，絕大多數情況只是要「確認收到」，用這個就夠了。
     public func answerCallbackQuery(callbackQueryID: String) async throws {
         try await answerCallbackQuery(callbackQueryID: callbackQueryID, text: nil)
+    }
+
+    /// 不帶 caption 的版本，語法糖。
+    public func sendPhoto(chatID: Int64, photo: TGFileSource) async throws {
+        try await sendPhoto(chatID: chatID, photo: photo, caption: nil)
+    }
+
+    /// 不帶 caption 的版本，語法糖。
+    public func sendDocument(chatID: Int64, document: TGFileSource) async throws {
+        try await sendDocument(chatID: chatID, document: document, caption: nil)
+    }
+
+    /// sendPhoto／sendDocument／getFile／downloadFile(filePath:) 的預設實作：沒有另外
+    /// 覆寫的型別（多半是測試用的 fake）直接 throw——這幾個是全新能力，沒有「更基本版本」
+    /// 可以退回，跟 sendMessage 那組預設實作（退回不支援新參數的舊版）不一樣。對只在乎
+    /// 既有功能的測試 fake 來說沒有影響，因為它們的測試從不呼叫這幾個方法；真正會用到的
+    /// 只有 URLSessionTelegramAPIClient 自己的覆寫版本。
+    public func sendPhoto(chatID: Int64, photo: TGFileSource, caption: String?) async throws {
+        throw TelegramAPIError.apiError("sendPhoto is not supported by this TelegramAPIClient")
+    }
+
+    public func sendDocument(chatID: Int64, document: TGFileSource, caption: String?) async throws {
+        throw TelegramAPIError.apiError("sendDocument is not supported by this TelegramAPIClient")
+    }
+
+    public func getFile(fileID: String) async throws -> String {
+        throw TelegramAPIError.apiError("getFile is not supported by this TelegramAPIClient")
+    }
+
+    public func downloadFile(filePath: String) async throws -> Data {
+        throw TelegramAPIError.apiError("downloadFile is not supported by this TelegramAPIClient")
+    }
+
+    /// getFile + downloadFile(filePath:) 兩步驟包成一步的語法糖，對應開發者實際想做的事：
+    /// 「給我 file_id，我要那個檔案的內容」，不用自己記得 Telegram 這邊是兩段式流程。
+    public func downloadFile(fileID: String) async throws -> Data {
+        let filePath = try await getFile(fileID: fileID)
+        return try await downloadFile(filePath: filePath)
     }
 }
 
@@ -264,6 +330,89 @@ public final class URLSessionTelegramAPIClient: TelegramAPIClient, @unchecked Se
         )
     }
 
+    public func sendPhoto(chatID: Int64, photo: TGFileSource, caption: String?) async throws {
+        switch photo {
+        case .fileID(let value), .url(let value):
+            struct Body: Encodable {
+                let chatID: Int64
+                let photo: String
+                let caption: String?
+                enum CodingKeys: String, CodingKey {
+                    case chatID = "chat_id"
+                    case photo
+                    case caption
+                }
+            }
+            _ = try await post(
+                path: "sendPhoto",
+                body: Body(chatID: chatID, photo: value, caption: caption),
+                responseType: TGMessage.self
+            )
+        case .data(let data, let filename, let mimeType):
+            _ = try await postMultipart(
+                path: "sendPhoto",
+                fields: ["chat_id": String(chatID), "caption": caption].compactMapValues { $0 },
+                fileField: "photo",
+                filename: filename,
+                mimeType: mimeType,
+                fileData: data,
+                responseType: TGMessage.self
+            )
+        }
+    }
+
+    public func sendDocument(chatID: Int64, document: TGFileSource, caption: String?) async throws {
+        switch document {
+        case .fileID(let value), .url(let value):
+            struct Body: Encodable {
+                let chatID: Int64
+                let document: String
+                let caption: String?
+                enum CodingKeys: String, CodingKey {
+                    case chatID = "chat_id"
+                    case document
+                    case caption
+                }
+            }
+            _ = try await post(
+                path: "sendDocument",
+                body: Body(chatID: chatID, document: value, caption: caption),
+                responseType: TGMessage.self
+            )
+        case .data(let data, let filename, let mimeType):
+            _ = try await postMultipart(
+                path: "sendDocument",
+                fields: ["chat_id": String(chatID), "caption": caption].compactMapValues { $0 },
+                fileField: "document",
+                filename: filename,
+                mimeType: mimeType,
+                fileData: data,
+                responseType: TGMessage.self
+            )
+        }
+    }
+
+    public func getFile(fileID: String) async throws -> String {
+        struct Body: Encodable {
+            let fileID: String
+            enum CodingKeys: String, CodingKey {
+                case fileID = "file_id"
+            }
+        }
+        let file = try await post(path: "getFile", body: Body(fileID: fileID), responseType: TGFile.self)
+        guard let filePath = file.filePath else {
+            throw TelegramAPIError.apiError("getFile returned no file_path for file_id \(fileID)")
+        }
+        return filePath
+    }
+
+    public func downloadFile(filePath: String) async throws -> Data {
+        // 下載走的是另一個網域（api.telegram.org/file/...），不是 api.telegram.org/bot.../...，
+        // 跟其他方法共用的 baseURL 組不出這個網址，這裡另外組。
+        let url = URL(string: "https://api.telegram.org/file/bot\(token)/\(filePath)")!
+        return try await sendRaw(URLRequest(url: url))
+    }
+
     // MARK: - 內部共用邏輯
 
     private func post<Body: Encodable, Result: Codable & Sendable>(
@@ -278,10 +427,64 @@ public final class URLSessionTelegramAPIClient: TelegramAPIClient, @unchecked Se
         return try await send(request, responseType: responseType)
     }
 
+    /// sendPhoto／sendDocument 的 .data(...) case 用，把純文字欄位跟一個檔案組成
+    /// multipart/form-data body——Telegram 收本地端上傳的檔案內容只吃這個格式，JSON
+    /// body（post(...) 那條路）沒辦法帶原始 bytes。boundary 用 UUID 確保不會跟檔案
+    /// 內容裡剛好出現的位元組序列撞在一起。
+    private func postMultipart<Result: Codable & Sendable>(
+        path: String,
+        fields: [String: String],
+        fileField: String,
+        filename: String,
+        mimeType: String,
+        fileData: Data,
+        responseType: Result.Type
+    ) async throws -> Result {
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var body = Data()
+
+        for (key, value) in fields {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"\(key)\"\r\n\r\n".data(using: .utf8)!)
+            body.append(value.data(using: .utf8)!)
+            body.append("\r\n".data(using: .utf8)!)
+        }
+
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"\(fileField)\"; filename=\"\(filename)\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
+        body.append(fileData)
+        body.append("\r\n".data(using: .utf8)!)
+
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+        var request = URLRequest(url: URL(string: "\(baseURL)/\(path)")!)
+        request.httpMethod = "POST"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+        return try await send(request, responseType: responseType)
+    }
+
     private func send<Result: Codable & Sendable>(
         _ request: URLRequest,
         responseType: Result.Type
     ) async throws -> Result {
+        let data = try await rawResponseData(for: request)
+        let decoded = try JSONDecoder().decode(TGResponse<Result>.self, from: data)
+        guard decoded.ok, let result = decoded.result else {
+            throw TelegramAPIError.apiError(decoded.description ?? "Telegram API returned ok=false")
+        }
+        return result
+    }
+
+    /// downloadFile(filePath:) 用：跟 send(...) 共用「打請求、檢查 HTTP 狀態碼」這段，
+    /// 但檔案下載端點回的不是 TGResponse JSON envelope，是檔案本身的原始 bytes，
+    /// 不能套用 send(...) 那段解碼邏輯。
+    private func sendRaw(_ request: URLRequest) async throws -> Data {
+        try await rawResponseData(for: request)
+    }
+
+    private func rawResponseData(for request: URLRequest) async throws -> Data {
         let (data, response) = try await session.data(for: request)
 
         guard let http = response as? HTTPURLResponse else {
@@ -291,11 +494,6 @@ public final class URLSessionTelegramAPIClient: TelegramAPIClient, @unchecked Se
             let body = String(data: data, encoding: .utf8) ?? ""
             throw TelegramAPIError.httpError(statusCode: http.statusCode, body: body)
         }
-
-        let decoded = try JSONDecoder().decode(TGResponse<Result>.self, from: data)
-        guard decoded.ok, let result = decoded.result else {
-            throw TelegramAPIError.apiError(decoded.description ?? "Telegram API returned ok=false")
-        }
-        return result
+        return data
     }
 }
