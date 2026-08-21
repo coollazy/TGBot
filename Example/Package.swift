@@ -20,6 +20,16 @@ let package = Package(
             dependencies: [
                 .product(name: "TGBot", package: "TGBot")
             ]
+        ),
+        // 示範「外部開發者怎麼幫自己的 bot 寫離線單元測試」：只 import TGBot（跟
+        // EchoBotExample 本身一樣，不用 @testable），直接依賴 EchoBotExample 本身
+        // 去測 makeUploadScene() 這個真正的 scene，不是另外掰一個玩具範例。
+        .testTarget(
+            name: "EchoBotExampleTests",
+            dependencies: [
+                "EchoBotExample",
+                .product(name: "TGBot", package: "TGBot")
+            ]
         )
     ]
 )

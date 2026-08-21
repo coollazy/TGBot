@@ -190,6 +190,60 @@ scene.on(.waitingForReceipt) { ctx in
 可以在測試裡用假的實作取代，完全不需要連上真實的 Telegram 服務——這個 repo 自己的測試
 （`swift test`）就是這樣寫的，可以參考 `Tests/` 底下的既有範例。
 
+可執行的完整版本在 [`Example/Tests/EchoBotExampleTests/UploadSceneTests.swift`](Example/Tests/EchoBotExampleTests/UploadSceneTests.swift)
+（`cd Example && swift test` 就能跑），測的是 `Example` 裡真正的 `/upload` scene，不是另外
+掰的玩具範例。重點是：不要透過 `TGBot` 這個門面類別測（它內部的 `ConversationEngine` 是
+`private`，沒開放 `dispatch(update:)`），而是自己組一份 `EngineRegistry` + `ConversationEngine`，
+把要測的 `Scene` 註冊上去，直接呼叫 `dispatch(update:)` 餵一筆手動建的 `Update` 進去，
+斷言假的 `apiClient` 收到了什麼：
+
+```swift
+import Testing
+import TGBot   // 開發者的機器人專案本身 import 的就是這個
+
+final class FakeAPIClient: TelegramAPIClient, @unchecked Sendable {
+    private(set) var sentMessages: [(chatID: Int64, text: String)] = []
+    func sendMessage(chatID: Int64, text: String, inlineKeyboard: [[TGInlineKeyboardButton]]?) async throws {
+        sentMessages.append((chatID, text))
+    }
+    func getUpdates(offset: Int?, timeout: Int) async throws -> [Update] { [] }
+    func setMyCommands(_ commands: [(name: String, description: String)]) async throws {}
+    func answerCallbackQuery(callbackQueryID: String, text: String?) async throws {}
+    func editMessageReplyMarkup(chatID: Int64, messageID: Int64) async throws {}
+    func editMessageText(chatID: Int64, messageID: Int64, text: String) async throws {}
+}
+
+struct NoOpScheduler: BackgroundTaskScheduling {
+    func start(chatID: Int64, taskID: String,
+               work: @escaping @Sendable (JobProgress) async throws -> Void,
+               onComplete: @escaping @Sendable (JobResult) async throws -> Void) async {}
+    func status(chatID: Int64, taskID: String) async -> JobStatus? { nil }
+}
+
+@Test("問候流程回覆正確的名字")
+func greetsUserByName() async throws {
+    let apiClient = FakeAPIClient()
+    let registry = EngineRegistry()
+    let engine = ConversationEngine(
+        stateStore: InMemoryStateStore(),
+        apiClient: apiClient,
+        scheduler: NoOpScheduler(),
+        logger: Logger(label: "test"),
+        registry: registry
+    )
+    registry.registerScene(myGreetScene, commandTrigger: "greet")  // 你自己 bot 裡的 scene
+
+    await engine.dispatch(update: Update(chatID: 1, text: "/greet", commandName: "greet"))
+    await engine.dispatch(update: Update(chatID: 1, text: "小明"))
+
+    #expect(apiClient.sentMessages.last?.text == "哈囉，小明！")
+}
+```
+
+多步驟流程、按鈕點擊（`callbackData:`）、照片/檔案（`photo:`/`document:`）都是同一招——
+手動建 `Update` 餵進去，斷言假的 `apiClient` 收到什麼；`UploadSceneTests.swift` 裡就示範了
+照片與檔案兩種附件的版本。
+
 ## 已知限制
 
 ### 跨聊天室的訊息會互相排隊
