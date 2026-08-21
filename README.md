@@ -119,7 +119,10 @@ handler 實際拿到的參數。
 - `ctx.text` / `ctx.callbackData`：讀使用者的輸入
 - `ctx.session`：讀寫這段流程累積的資料
 - `ctx.reply(_:)` / `ctx.replyWithMenu(_:buttons:)`：回訊息
-- `ctx.startBackgroundJob(id:work:onComplete:)`：啟動不卡住對話的長任務
+- `ctx.startBackgroundJob(id:work:onComplete:)`：啟動不卡住對話的長任務。任務執行期間
+  如果使用者透過正常訊息又編輯過 session，任務完成時會保留使用者較新的那份，不會被
+  任務啟動當下那份舊的 session 覆蓋（`onComplete` 決定的狀態轉移仍然照常套用，只有
+  session 資料的部分會這樣處理）
 - `ctx.backgroundJobStatus(id:)`：查詢任務進度
 
 ### `Transition<State>`
