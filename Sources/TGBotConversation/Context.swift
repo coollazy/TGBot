@@ -53,6 +53,15 @@ public final class Context<State: ConversationState, Session: Codable & Sendable
         work: @escaping @Sendable (JobProgress) async throws -> Void,
         onComplete: @escaping @Sendable (JobResult, String, Context<State, Session>) async throws -> Transition<State>?
     ) {
+        // 任務啟動當下（同步、Task {} 之前）拍一張 session 快照：在任務真的完成、
+        // onComplete 閉包被呼叫之前，沒有其他東西會動這個 self.session（唯一會動它的
+        // 就是 onComplete 閉包本身），所以這是可靠的「任務啟動當下」基準。用來讓
+        // applyBackgroundTransition 判斷：完成時資料庫裡的 session 如果還是這份快照，
+        // 代表使用者沒有在任務執行期間同時編輯過，可以放心套用任務算出來的結果；如果
+        // 不一樣，代表使用者透過正常 dispatch() 又走了幾步、session 也被改過，那份較新
+        // 的 session 不該被任務啟動當下的舊快照蓋掉。try?：這個函式本身簽名不丟錯，
+        // 編碼失敗（極端邊界）就視為「沒有基準可以判斷」，不擋任務啟動。
+        let baselineSessionData = try? canonicalJSONEncoder().encode(session)
         Task {
             // 把型別安全的 onComplete 用型別擦除包起來，存進這個 chat 的 pendingCompletions（6.2 節）。
             //
@@ -72,7 +81,7 @@ public final class Context<State: ConversationState, Session: Codable & Sendable
                     // 在這裡（還是具體的 State/Session 型別）編碼成引擎看得懂的擦除後格式，
                     // 呼叫 applyBackgroundTransition 套用回對話狀態——只有原本的 scene 仍然
                     // active 時才會真的生效，見 ConversationEngineHandle 的說明。
-                    let encoder = JSONEncoder()
+                    let encoder = canonicalJSONEncoder()
                     let kind: TransitionKind
                     let newStateData: Data?
                     switch transition {
@@ -105,7 +114,8 @@ public final class Context<State: ConversationState, Session: Codable & Sendable
                         sceneName: self.sceneName,
                         kind: kind,
                         newStateData: newStateData,
-                        newSessionData: newSessionData
+                        newSessionData: newSessionData,
+                        baselineSessionData: baselineSessionData
                     )
                 }
             }

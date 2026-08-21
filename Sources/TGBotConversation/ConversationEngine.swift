@@ -63,7 +63,8 @@ public actor ConversationEngine: ConversationEngineHandle {
         sceneName: String,
         kind: TransitionKind,
         newStateData: Data?,
-        newSessionData: Data
+        newSessionData: Data,
+        baselineSessionData: Data?
     ) async {
         var record = await stateStore.load(chatID: chatID)
         guard record.activeScene == sceneName else {
@@ -74,22 +75,36 @@ public actor ConversationEngine: ConversationEngineHandle {
             logger.debug("applyBackgroundTransition: scene \(sceneName) is no longer active for chat \(chatID), skipping")
             return
         }
+
+        // 樂觀併發檢測：baselineSessionData 是任務啟動當下的 session 快照。如果資料庫裡
+        // 目前的 session 還是同一份，代表使用者沒有在任務執行期間同時編輯過，可以放心用
+        // newSessionData（任務算出來的結果）覆蓋；如果不一樣，代表使用者透過正常 dispatch()
+        // 又走了幾步、session 也被改過，這份較新的 session 不該被任務啟動當下的舊快照蓋掉——
+        // 保留資料庫裡較新的那份，但仍然套用開發者透過 onComplete 決定的狀態轉移（那是
+        // 明確的決定，跟 session 資料競爭是兩件事）。nil 代表沒有基準可以判斷，退化成舊行為。
+        let sessionConflict = baselineSessionData.map { $0 != record.sessionData } ?? false
+        if sessionConflict {
+            logger.warning("applyBackgroundTransition: chat \(chatID) scene \(sceneName) — session 在背景任務執行期間被同時編輯過，保留較新的 session，不用任務啟動當下那份舊快照覆蓋")
+        }
+
         switch kind {
         case .moved:
+            let sessionDataToUse = sessionConflict ? record.sessionData : newSessionData
             record.currentStateData = newStateData
-            record.sessionData = newSessionData
+            record.sessionData = sessionDataToUse
             // 跟 dispatch() 的 .moved 分支一致：轉移到的新 state 有沒有註冊 onEnter，
             // 有的話套用它的結果（可能又轉移、又回話），不用等使用者下一句話才看到
             // 提示。已知限制：onEnter 這裡回傳的結果如果又是 .interrupted，這條通道
             // 不支援（跟下面既有的 .interrupted case 是同一種限制——背景任務完成觸發
             // 的路徑不支援連續觸發新的 interrupt），安靜忽略、只記 log；stateHistory
             // 這裡固定傳空陣列，跟既有 .interrupted 的限制一樣，這條通道本來就沒有
-            // 保留 rollback 歷史可以帶。
+            // 保留 rollback 歷史可以帶。sessionData 傳的是 sessionDataToUse（已經處理過
+            // 衝突），不是原始的 newSessionData，確保 onEnter 操作的是正確的那份。
             if let scene = registry.scene(named: sceneName) {
                 let dependencies = SceneDependencies(apiClient: apiClient, scheduler: scheduler, engine: self, logger: logger)
                 if let enterResult = try? await scene.enter(
                     stateData: newStateData,
-                    sessionData: newSessionData,
+                    sessionData: sessionDataToUse,
                     stateHistory: [],
                     chatID: chatID,
                     userID: nil,
@@ -110,11 +125,12 @@ public actor ConversationEngine: ConversationEngineHandle {
         case .stayed, .rolledBack:
             // Context 本身沒有保存「目前的 state」（開發者在 onComplete 裡拿到的 Context 只
             // 帶 session），所以這裡沒有東西可以重新編碼進 currentStateData，維持原樣不動；
-            // 只更新 session（開發者可能在 onComplete 裡改了 ctx.session）。
-            // 已知取捨：如果使用者在背景任務執行期間、於同一個 scene 內又往下走了幾步、
-            // session 也跟著被改過，這裡會用背景任務啟動當下那份舊的 session 覆蓋掉——
-            // 這個時間窗口的資料競爭目前沒有處理，留待有實際需求再評估怎麼做（例如欄位級合併）。
-            record.sessionData = newSessionData
+            // session 只有在沒有衝突時才用 newSessionData 覆蓋——有衝突（sessionConflict）
+            // 就維持 record.sessionData 原樣，保留使用者較新的那份，不用 newSessionData
+            // （任務啟動當下那份舊快照）蓋掉。
+            if !sessionConflict {
+                record.sessionData = newSessionData
+            }
             await stateStore.save(chatID: chatID, record)
         case .ended:
             record.reset()

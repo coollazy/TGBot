@@ -29,7 +29,7 @@ struct EngineRegistryTests {
         func deliverBackgroundJobResult(chatID: Int64, taskID: String, result: JobResult) async {}
         func applyBackgroundTransition(
             chatID: Int64, sceneName: String, kind: TransitionKind,
-            newStateData: Data?, newSessionData: Data
+            newStateData: Data?, newSessionData: Data, baselineSessionData: Data?
         ) async {}
     }
 

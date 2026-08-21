@@ -40,7 +40,7 @@ public struct AnyInterruptReturnHandler: Sendable {
     ) {
         self.invoke = { resultData, parentStateData, parentSessionData, parentStateHistory, parentSceneName, chatID, userID, dependencies in
             let decoder = JSONDecoder()
-            let encoder = JSONEncoder()
+            let encoder = canonicalJSONEncoder()
 
             // 這裡的 state／session 是父流程被中斷當下存下來的，不是「可能不存在、要退化成
             // initial」的情境（跟 AnyScene._resume 一開始那個 fallback 不一樣）——如果 decode

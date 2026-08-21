@@ -324,4 +324,160 @@ struct ContextBackgroundJobTests {
 
         #expect(!apiClient.sentMessages.contains { $0.text == "reached done state" })
     }
+
+    // 缺口 #5：如果使用者在背景任務執行期間，透過正常 dispatch() 在同一個 scene 裡
+    // 又編輯過 session，任務完成時過去會用「任務啟動當下那份舊 session」把使用者的
+    // 編輯整個覆蓋掉。下面 3 條測試驗證修好之後：較新的 session 會被保留，不會被
+    // 任務那份舊快照蓋掉——分別涵蓋 .moved（onComplete 回傳 .transition(to:)）、
+    // 沒有真的競爭的正常情況（迴歸）、.stayed（onComplete 回傳 .stay）三種路徑。
+    struct ConflictSession: Codable, Sendable {
+        var value: String = "initial"
+    }
+
+    @Test("a concurrent session edit made while the job is pending is NOT clobbered by the job's stale snapshot, when onComplete .transition(to:)s (inside: gap #5 fix)")
+    func concurrentSessionEditSurvivesTransition() async throws {
+        enum JobState: ConversationState { case main, waiting, done }
+
+        let apiClient = RecordingAPIClient()
+        let registry = EngineRegistry()
+        let scheduler = ManualScheduler()
+        let engine = ConversationEngine(
+            stateStore: InMemoryStateStore(),
+            apiClient: apiClient,
+            scheduler: scheduler,
+            logger: Logger(label: "test"),
+            registry: registry
+        )
+
+        let scene = Scene<JobState, ConflictSession>(name: "job-conflict-moved", initial: .main, initialSession: ConflictSession())
+        scene.on(.main) { ctx in
+            ctx.startBackgroundJob(id: "t6", work: { _ in }, onComplete: { _, _, ctx in
+                ctx.session.value = "from job"
+                return .transition(to: .done)
+            })
+            return .transition(to: .waiting)
+        }
+        scene.on(.waiting) { ctx in
+            if ctx.text == "edit please" {
+                ctx.session.value = "edited by user"
+            }
+            return .stay
+        }
+        scene.on(.done) { ctx in
+            try await ctx.reply("done: \(ctx.session.value)")
+            return .end
+        }
+        registry.registerScene(scene, commandTrigger: "job-conflict-moved")
+
+        await engine.dispatch(update: Update(updateID: 1, chatID: 1, text: "/job-conflict-moved", commandName: "job-conflict-moved"))
+        await waitUntil { await scheduler.hasPending(chatID: 1, taskID: "t6") }
+
+        // 任務還沒完成，使用者透過正常 dispatch() 在同一個 scene 裡編輯了 session
+        await engine.dispatch(update: Update(updateID: 2, chatID: 1, text: "edit please"))
+
+        await scheduler.trigger(chatID: 1, taskID: "t6", result: .success)
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        await engine.dispatch(update: Update(updateID: 3, chatID: 1, text: "anything"))
+
+        // 狀態轉移（.main -> .waiting -> .done）仍然照開發者的決定套用，只有 session
+        // 的部分保留使用者較新那份，不是被任務啟動當下那份舊快照蓋掉
+        #expect(apiClient.sentMessages.contains { $0.text == "done: edited by user" })
+        #expect(!apiClient.sentMessages.contains { $0.text == "done: from job" })
+    }
+
+    @Test("without a concurrent edit, onComplete's session change is applied normally (regression, no false-positive conflict)")
+    func noConcurrentEditAppliesJobSessionNormally() async throws {
+        enum JobState: ConversationState { case main, waiting, done }
+
+        let apiClient = RecordingAPIClient()
+        let registry = EngineRegistry()
+        let scheduler = ManualScheduler()
+        let engine = ConversationEngine(
+            stateStore: InMemoryStateStore(),
+            apiClient: apiClient,
+            scheduler: scheduler,
+            logger: Logger(label: "test"),
+            registry: registry
+        )
+
+        let scene = Scene<JobState, ConflictSession>(name: "job-noconflict", initial: .main, initialSession: ConflictSession())
+        scene.on(.main) { ctx in
+            ctx.startBackgroundJob(id: "t7", work: { _ in }, onComplete: { _, _, ctx in
+                ctx.session.value = "from job"
+                return .transition(to: .done)
+            })
+            return .transition(to: .waiting)
+        }
+        scene.on(.waiting) { ctx in
+            if ctx.text == "edit please" {
+                ctx.session.value = "edited by user"
+            }
+            return .stay
+        }
+        scene.on(.done) { ctx in
+            try await ctx.reply("done: \(ctx.session.value)")
+            return .end
+        }
+        registry.registerScene(scene, commandTrigger: "job-noconflict")
+
+        await engine.dispatch(update: Update(updateID: 1, chatID: 1, text: "/job-noconflict", commandName: "job-noconflict"))
+        await waitUntil { await scheduler.hasPending(chatID: 1, taskID: "t7") }
+
+        // 這次不模擬使用者編輯，session 應該還是任務啟動當下那份，沒有衝突
+
+        await scheduler.trigger(chatID: 1, taskID: "t7", result: .success)
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        await engine.dispatch(update: Update(updateID: 2, chatID: 1, text: "anything"))
+
+        #expect(apiClient.sentMessages.contains { $0.text == "done: from job" })
+    }
+
+    @Test("a concurrent session edit also survives through the .stay branch (onComplete returns .stay, not .transition) (inside)")
+    func concurrentSessionEditSurvivesStay() async throws {
+        enum JobState: ConversationState { case main, waiting }
+
+        let apiClient = RecordingAPIClient()
+        let registry = EngineRegistry()
+        let scheduler = ManualScheduler()
+        let engine = ConversationEngine(
+            stateStore: InMemoryStateStore(),
+            apiClient: apiClient,
+            scheduler: scheduler,
+            logger: Logger(label: "test"),
+            registry: registry
+        )
+
+        let scene = Scene<JobState, ConflictSession>(name: "job-conflict-stay", initial: .main, initialSession: ConflictSession())
+        scene.on(.main) { ctx in
+            ctx.startBackgroundJob(id: "t8", work: { _ in }, onComplete: { _, _, ctx in
+                ctx.session.value = "from job"
+                return .stay
+            })
+            return .transition(to: .waiting)
+        }
+        scene.on(.waiting) { ctx in
+            if ctx.text == "edit please" {
+                ctx.session.value = "edited by user"
+                return .stay
+            }
+            try await ctx.reply("waiting: \(ctx.session.value)")
+            return .stay
+        }
+        registry.registerScene(scene, commandTrigger: "job-conflict-stay")
+
+        await engine.dispatch(update: Update(updateID: 1, chatID: 1, text: "/job-conflict-stay", commandName: "job-conflict-stay"))
+        await waitUntil { await scheduler.hasPending(chatID: 1, taskID: "t8") }
+
+        await engine.dispatch(update: Update(updateID: 2, chatID: 1, text: "edit please"))
+
+        await scheduler.trigger(chatID: 1, taskID: "t8", result: .success)
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        await engine.dispatch(update: Update(updateID: 3, chatID: 1, text: "anything"))
+
+        #expect(apiClient.sentMessages.contains { $0.text == "waiting: edited by user" })
+        #expect(!apiClient.sentMessages.contains { $0.text == "waiting: from job" })
+    }
 }

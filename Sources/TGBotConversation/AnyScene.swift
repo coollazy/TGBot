@@ -122,7 +122,7 @@ public struct AnyScene: Sendable {
     ) {
         self.name = scene.name
         if let initialSession {
-            self.initialSessionOverride = try? JSONEncoder().encode(initialSession)
+            self.initialSessionOverride = try? canonicalJSONEncoder().encode(initialSession)
         } else {
             self.initialSessionOverride = nil
         }
@@ -150,7 +150,7 @@ public struct AnyScene: Sendable {
 
         self._resume = { update, savedStateData, savedSessionData, stateHistory, dependencies in
             let decoder = JSONDecoder()
-            let encoder = JSONEncoder()
+            let encoder = canonicalJSONEncoder()
 
             let state: State
             if let savedStateData, let decoded = try? decoder.decode(State.self, from: savedStateData) {
@@ -185,7 +185,7 @@ public struct AnyScene: Sendable {
 
         self._enter = { stateData, sessionData, stateHistory, chatID, userID, dependencies in
             let decoder = JSONDecoder()
-            let encoder = JSONEncoder()
+            let encoder = canonicalJSONEncoder()
 
             let state: State
             if let stateData, let decoded = try? decoder.decode(State.self, from: stateData) {
